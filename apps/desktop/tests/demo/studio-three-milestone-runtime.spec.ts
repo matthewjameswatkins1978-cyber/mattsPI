@@ -16,6 +16,7 @@ import {
 import {
   allText,
   assistantTurnCount,
+  messageText,
   pickShellTool,
   scriptedText,
   scriptedToolCall,
@@ -515,7 +516,9 @@ function waitFor(taskIds: readonly string[], state: CoordinatorState): ScriptedR
     .filter((id): id is string => Boolean(id));
   return scriptedToolCall("wait_for_child_threads", {
     thread_ids: threadIds,
-    timeout_ms: 60_000,
+    // Waiting is host-side and costs no inference; one long wait replaces a
+    // polling loop of short ones.
+    timeout_ms: 300_000,
   });
 }
 
@@ -832,6 +835,7 @@ async function gitOutput(cwd: string, args: readonly string[]): Promise<string> 
 
 test("Studio coordinates a real three-milestone run through native Pi child threads", async () => {
   test.setTimeout(480_000);
+  const demoStartedAt = Date.now();
   const proofDir = process.env.PI_APP_STUDIO_DEMO_PROOF_DIR?.trim();
   if (proofDir) {
     await mkdir(proofDir, { recursive: true });
@@ -1159,6 +1163,22 @@ test("Studio coordinates a real three-milestone run through native Pi child thre
     expect(dependencyRejection, "M2 must be rejected while M1 is undelivered").toBeGreaterThan(-1);
     expect(capRejection, "the two-child cap must reject an early inspector").toBeGreaterThan(-1);
 
+    // Economy: evidence readiness is reconciled inside the host, so completion
+    // saves must never be retried by the model while a read is in flight. The
+    // pre-economy baseline needed 155 saves (143 rejected) for the same run.
+    const saveExchanges = exchanges.filter((exchange) => exchange.name === "save_studio_run");
+    const evidenceLagRejections = saveExchanges.filter((exchange) =>
+      /must read the independent-inspector/i.test(exchange.resultText),
+    );
+    expect(
+      evidenceLagRejections,
+      "host-side reconciliation must absorb evidence lag without model-driven save retries",
+    ).toHaveLength(0);
+    expect(
+      saveExchanges.length,
+      "run bookkeeping must not require repeated model saves",
+    ).toBeLessThanOrEqual(25);
+
     const firstSaveWith = (milestoneId: string, milestoneStatus: string) =>
       indexOf((exchange) => {
         if (
@@ -1270,6 +1290,84 @@ test("Studio coordinates a real three-milestone run through native Pi child thre
       expect(workerLog.split("\n")[0]).toContain(workerSha.slice(0, 7));
     }
 
+    // Pilot 1 economy accounting: turns, tool calls, saves, elapsed time,
+    // coordinator context growth and combined token usage across the
+    // coordinator and every child session (cached tokens included where the
+    // provider reports them).
+    const turnsByActor = server.requestLog().reduce<Record<string, number>>((counts, entry) => {
+      counts[entry.actor] = (counts[entry.actor] ?? 0) + 1;
+      return counts;
+    }, {});
+    const toolCallsByName = exchanges.reduce<Record<string, number>>((counts, exchange) => {
+      counts[exchange.name] = (counts[exchange.name] ?? 0) + 1;
+      return counts;
+    }, {});
+    const acceptedSaves = saveExchanges.filter((exchange) =>
+      /^Saved Studio run /.test(exchange.resultText),
+    ).length;
+    const usageEntries = Object.entries(finalState.sessionUsageBySession);
+    const combinedUsage = usageEntries.reduce(
+      (acc, [, usage]) => ({
+        input: acc.input + usage.totals.input,
+        output: acc.output + usage.totals.output,
+        cacheRead: acc.cacheRead + usage.totals.cacheRead,
+        cacheWrite: acc.cacheWrite + usage.totals.cacheWrite,
+        cost: acc.cost + usage.totals.cost,
+      }),
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    );
+    const coordinatorChars = finalConversation.messages.reduce(
+      (total, message) => total + messageText(message).length,
+      0,
+    );
+    const costReport = {
+      runId: run.id,
+      finalRevision: run.revision,
+      elapsedMs: Date.now() - demoStartedAt,
+      modelTurns: {
+        byActor: turnsByActor,
+        total: Object.values(turnsByActor).reduce((sum, count) => sum + count, 0),
+      },
+      toolCalls: { byName: toolCallsByName, total: exchanges.length },
+      saves: {
+        total: saveExchanges.length,
+        accepted: acceptedSaves,
+        rejected: saveExchanges.length - acceptedSaves,
+        evidenceLagRejections: evidenceLagRejections.length,
+      },
+      coordinatorContext: {
+        messages: finalConversation.messages.length,
+        chars: coordinatorChars,
+        estimatedTokens: Math.round(coordinatorChars / 4),
+      },
+      tokenUsage:
+        usageEntries.length > 0
+          ? {
+              sessions: usageEntries.length,
+              combinedTotals: combinedUsage,
+              bySession: finalState.sessionUsageBySession,
+            }
+          : {
+              sessions: 0,
+              note: "Fixture provider responses carry no usage; real-model runs report actual tokens.",
+            },
+      baseline: {
+        note: "Pre-economy run studio-86466a8d-d3cd-4ca5-96f3-c978784b8ca3, same spec and machine",
+        saves: 155,
+        rejectedSaves: 143,
+        evidenceLagRejections: 142,
+        toolCalls: 178,
+        elapsedMsApprox: 204_000,
+      },
+    };
+    console.log(
+      `Studio demo economy: turns=${costReport.modelTurns.total} ` +
+        `toolCalls=${costReport.toolCalls.total} saves=${costReport.saves.total} ` +
+        `(rejected ${costReport.saves.rejected}) ` +
+        `coordinatorContext≈${costReport.coordinatorContext.estimatedTokens} est. tokens ` +
+        `elapsedMs=${costReport.elapsedMs}`,
+    );
+
     if (proofDir) {
       await window.getByTestId("sidebar-studio").click();
       await expect(window.getByTestId("studio-runs-view")).toBeVisible();
@@ -1317,6 +1415,10 @@ test("Studio coordinates a real three-milestone run through native Pi child thre
           null,
           2,
         )}\n`,
+      );
+      await writeFile(
+        join(proofDir, "cost-report.json"),
+        `${JSON.stringify(costReport, null, 2)}\n`,
       );
       console.log(`Studio three-milestone runtime demo artifacts: ${proofDir}`);
     }
