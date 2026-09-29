@@ -67,6 +67,8 @@ export interface ReconcileStudioGitHubPullRequestInput {
 export type StudioExternalReviewStatus =
   "awaiting-lucy" | "changes-requested" | "accepted" | "merged" | "superseded";
 
+export type StudioMilestoneDeliveryRequirement = "github-pr" | "local";
+
 export interface StudioMilestone {
   readonly id: string;
   readonly title: string;
@@ -79,6 +81,8 @@ export interface StudioMilestone {
   readonly pullRequestUrl?: string;
   /** Append-only GitHub checkpoint history; legacy checkpoint fields remain readable. */
   readonly githubCheckpoints?: readonly StudioGitHubCheckpoint[];
+  /** When 'github-pr', local verification alone does not unlock dependent milestones; merge observation is required. */
+  readonly deliveryRequirement?: StudioMilestoneDeliveryRequirement;
   readonly updatedAt: string;
 }
 
@@ -450,7 +454,9 @@ export function preserveStudioRunHistory(
       milestone.id !== previous.id ||
       milestone.title !== previous.title ||
       milestone.instruction !== previous.instruction ||
-      JSON.stringify(milestone.dependsOn) !== JSON.stringify(previous.dependsOn)
+      JSON.stringify(milestone.dependsOn) !== JSON.stringify(previous.dependsOn) ||
+      (previous.deliveryRequirement !== undefined &&
+        milestone.deliveryRequirement !== previous.deliveryRequirement)
     ) {
       throw new Error("Existing Studio milestone identities and dependencies are immutable.");
     }
@@ -557,11 +563,16 @@ export function preserveStudioRunHistory(
     const resolvedSha = resolvedLatest?.headSha ?? milestone.checkpointSha ?? previous.checkpointSha;
     const resolvedUrl =
       resolvedLatest?.pullRequestUrl ?? milestone.pullRequestUrl ?? previous.pullRequestUrl;
+    const resolvedDeliveryRequirement =
+      milestone.deliveryRequirement ?? previous.deliveryRequirement;
     return {
       ...milestone,
       ...(resolvedCheckpoints ? { githubCheckpoints: resolvedCheckpoints } : {}),
       ...(resolvedSha ? { checkpointSha: resolvedSha } : {}),
       ...(resolvedUrl ? { pullRequestUrl: resolvedUrl } : {}),
+      ...(resolvedDeliveryRequirement !== undefined
+        ? { deliveryRequirement: resolvedDeliveryRequirement }
+        : {}),
     };
   });
   return { ...next, milestones };
@@ -632,8 +643,16 @@ export interface StudioRunsFile {
 
 export function isStudioMilestoneDependencySatisfied(milestone: StudioMilestone): boolean {
   if (milestone.status !== "complete") return false;
-  const latestCheckpoint = milestone.githubCheckpoints?.at(-1);
-  if (latestCheckpoint) {
+  if (milestone.deliveryRequirement === "local") {
+    return true;
+  }
+  if (
+    milestone.deliveryRequirement === "github-pr" ||
+    Boolean(milestone.pullRequestUrl) ||
+    Boolean(milestone.githubCheckpoints && milestone.githubCheckpoints.length > 0)
+  ) {
+    const latestCheckpoint = milestone.githubCheckpoints?.at(-1);
+    if (!latestCheckpoint) return false;
     return latestCheckpoint.reviewHistory.some(
       ({ decision, source, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) =>
         decision === "merged" &&
@@ -641,9 +660,6 @@ export function isStudioMilestoneDependencySatisfied(milestone: StudioMilestone)
         reviewedHeadSha.toLowerCase() === latestCheckpoint.headSha.toLowerCase() &&
         Boolean(observedAt && mergeCommitSha && mergedAt),
     );
-  }
-  if (milestone.pullRequestUrl) {
-    return false;
   }
   return true;
 }

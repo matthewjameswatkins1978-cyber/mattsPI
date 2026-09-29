@@ -4,6 +4,7 @@ packages:
   - video
 
 onlyBuiltDependencies:
+  - '@google/genai'
   - electron
   - electron-winstaller
   - esbuild

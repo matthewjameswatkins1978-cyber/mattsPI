@@ -227,8 +227,26 @@ test.describe("Studio run plan state", () => {
     expect(() =>
       preserveStudioRunHistory(current, {
         ...current,
-        milestones: [milestone, { ...current.milestones[1], dependsOn: [] }],
+        milestones: [milestone, { ...current.milestones[1]!, dependsOn: [] }],
       }),
+    ).toThrow("identities and dependencies are immutable");
+    expect(() =>
+      preserveStudioRunHistory(
+        {
+          ...current,
+          milestones: [
+            { ...milestone, deliveryRequirement: "github-pr" },
+            current.milestones[1]!,
+          ],
+        },
+        {
+          ...current,
+          milestones: [
+            { ...milestone, deliveryRequirement: "local" },
+            current.milestones[1]!,
+          ],
+        },
+      ),
     ).toThrow("identities and dependencies are immutable");
   });
 
@@ -358,6 +376,38 @@ test.describe("Studio run plan state", () => {
     expect(decoded.milestones[0].githubCheckpoints).toBeUndefined();
   });
 
+  test("decodes deliveryRequirement and rejects invalid delivery values", () => {
+    const valid = decodeStudioRunsFile({
+      version: 1,
+      runs: [
+        {
+          ...run,
+          milestones: [
+            { ...run.milestones[0]!, deliveryRequirement: "github-pr" },
+            { ...run.milestones[1]!, deliveryRequirement: "local" },
+          ],
+        },
+      ],
+    }).runs[0]!;
+    expect(valid.milestones[0]!.deliveryRequirement).toBe("github-pr");
+    expect(valid.milestones[1]!.deliveryRequirement).toBe("local");
+
+    expect(() =>
+      decodeStudioRunsFile({
+        version: 1,
+        runs: [
+          {
+            ...run,
+            milestones: [
+              { ...run.milestones[0]!, deliveryRequirement: "invalid-delivery" },
+              run.milestones[1]!,
+            ],
+          },
+        ],
+      }),
+    ).toThrow("Invalid runs[0].milestones[0].deliveryRequirement");
+  });
+
   test("makes only dependency-ready queued milestones dispatchable", () => {
     expect(availableStudioMilestones(run).map(({ id }) => id)).toEqual(["m1"]);
     const started = transitionStudioMilestone(run, "m1", "running");
@@ -374,7 +424,10 @@ test.describe("Studio run plan state", () => {
     const runWithIndependent: StudioRun = {
       ...run,
       milestones: [
-        run.milestones[0]!,
+        {
+          ...run.milestones[0]!,
+          deliveryRequirement: "github-pr",
+        },
         run.milestones[1]!,
         {
           id: "m3",
@@ -389,7 +442,7 @@ test.describe("Studio run plan state", () => {
       ],
     };
 
-    // m1 complete locally with no PR: m2 and m3 both available
+    // 1. M1 locally complete, PR not yet created: dependent M2 is blocked; independent M3 is available
     const m1Complete = transitionStudioMilestone(
       transitionStudioMilestone(
         transitionStudioMilestone(runWithIndependent, "m1", "running"),
@@ -399,9 +452,9 @@ test.describe("Studio run plan state", () => {
       "m1",
       "complete",
     );
-    expect(availableStudioMilestones(m1Complete).map(({ id }) => id)).toEqual(["m2", "m3"]);
+    expect(availableStudioMilestones(m1Complete).map(({ id }) => id)).toEqual(["m3"]);
 
-    // m1 pushed to PR and awaiting Lucy: m2 is gated, but unaffected m3 remains available
+    // 2. M1 awaiting Lucy review (PR checkpoint recorded): M2 is blocked; independent M3 remains available
     const m1WithPr = recordStudioGitHubCheckpoint(m1Complete.milestones[0]!, {
       repository: "owner/repo",
       branch: "studio/m1",
@@ -418,7 +471,7 @@ test.describe("Studio run plan state", () => {
     expect(preserveStudioRunHistory(m1Complete, runAwaitingLucy)).toBeTruthy();
     expect(availableStudioMilestones(runAwaitingLucy).map(({ id }) => id)).toEqual(["m3"]);
 
-    // Observation: PR merged on GitHub -> dependent m2 becomes available alongside m3
+    // 3. Actual GitHub merge observation recorded on M1: dependent M2 becomes available alongside M3
     const observation = {
       repository: "owner/repo",
       branch: "studio/m1",
@@ -438,6 +491,29 @@ test.describe("Studio run plan state", () => {
     };
     expect(preserveStudioRunHistory(runAwaitingLucy, runMerged, "github-observer")).toBeTruthy();
     expect(availableStudioMilestones(runMerged).map(({ id }) => id)).toEqual(["m2", "m3"]);
+
+    // 4. Explicitly local-only milestones: normal local dependency progression remains possible
+    const localRun: StudioRun = {
+      ...runWithIndependent,
+      milestones: [
+        {
+          ...runWithIndependent.milestones[0]!,
+          deliveryRequirement: "local",
+        },
+        runWithIndependent.milestones[1]!,
+        runWithIndependent.milestones[2]!,
+      ],
+    };
+    const localM1Complete = transitionStudioMilestone(
+      transitionStudioMilestone(
+        transitionStudioMilestone(localRun, "m1", "running"),
+        "m1",
+        "verifying",
+      ),
+      "m1",
+      "complete",
+    );
+    expect(availableStudioMilestones(localM1Complete).map(({ id }) => id)).toEqual(["m2", "m3"]);
   });
 
   test("gates dispatch while paused and does not allow premature completion", () => {

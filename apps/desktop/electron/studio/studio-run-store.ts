@@ -73,6 +73,7 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
       "checkpointSha",
       "pullRequestUrl",
       "githubCheckpoints",
+      "deliveryRequirement",
       "updatedAt",
     ],
     at,
@@ -82,6 +83,13 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
     !milestoneStatuses.includes(value.status as StudioMilestoneStatus)
   )
     throw new Error(`Invalid ${at}.status`);
+  if (
+    value.deliveryRequirement !== undefined &&
+    value.deliveryRequirement !== "github-pr" &&
+    value.deliveryRequirement !== "local"
+  ) {
+    throw new Error(`Invalid ${at}.deliveryRequirement`);
+  }
   const githubCheckpoints =
     value.githubCheckpoints === undefined
       ? undefined
@@ -104,6 +112,9 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
       ? { pullRequestUrl: value.pullRequestUrl as string }
       : {}),
     ...(githubCheckpoints ? { githubCheckpoints } : {}),
+    ...(value.deliveryRequirement
+      ? { deliveryRequirement: value.deliveryRequirement as "github-pr" | "local" }
+      : {}),
     updatedAt: text(value.updatedAt, `${at}.updatedAt`),
   };
 }

@@ -447,6 +447,7 @@ function createSaveStudioRunTool(
         ],
       },
     },
+    deliveryRequirement: { type: "string", enum: ["github-pr", "local"] },
     updatedAt: { type: "string" },
   };
   return {
