@@ -210,7 +210,7 @@ function createStoreBackedOrchestrationRuntimeBridge(): OrchestrationRuntimeBrid
       if (!currentRoot || currentRoot !== targetRoot) {
         throw new Error("Studio plans must remain within the current project's workspace.");
       }
-      await store.saveStudioRun(run);
+      await store.saveStudioRun(run, { source: "model" });
       return {
         content: [
           { type: "text", text: `Saved Studio run ${run.id} at revision ${run.revision}.` },

@@ -286,6 +286,7 @@ function decodeRun(value: unknown, at: string): StudioRun {
       "repositoryPath",
       "specification",
       "coordinatorSessionId",
+      "deliveryPolicy",
       "specificationRevision",
       "corrections",
       "mode",
@@ -300,6 +301,13 @@ function decodeRun(value: unknown, at: string): StudioRun {
   );
   if (value.mode !== "observed" && value.mode !== "autonomous")
     throw new Error(`Invalid ${at}.mode`);
+  if (
+    value.deliveryPolicy !== undefined &&
+    value.deliveryPolicy !== "github-pr" &&
+    value.deliveryPolicy !== "local"
+  ) {
+    throw new Error(`Invalid ${at}.deliveryPolicy`);
+  }
   if (!runStatuses.includes(value.status as StudioRunStatus))
     throw new Error(`Invalid ${at}.status`);
   if (!Array.isArray(value.milestones) || value.milestones.length > MAX_STUDIO_MILESTONES)
@@ -359,6 +367,9 @@ function decodeRun(value: unknown, at: string): StudioRun {
     specification: text(value.specification, `${at}.specification`),
     ...(optionalText(value.coordinatorSessionId, `${at}.coordinatorSessionId`)
       ? { coordinatorSessionId: value.coordinatorSessionId as string }
+      : {}),
+    ...(value.deliveryPolicy
+      ? { deliveryPolicy: value.deliveryPolicy as "github-pr" | "local" }
       : {}),
     specificationRevision: specificationRevision as number,
     corrections,

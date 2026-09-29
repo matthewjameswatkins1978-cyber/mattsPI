@@ -69,6 +69,13 @@ export type StudioExternalReviewStatus =
 
 export type StudioMilestoneDeliveryRequirement = "github-pr" | "local";
 
+/**
+ * Host-owned run-level default for newly planned milestones. Only the authorised
+ * UI creation path may record "local"; model-facing saves never set or change it.
+ * Once persisted, the policy is immutable for the life of the run.
+ */
+export type StudioRunDeliveryPolicy = StudioMilestoneDeliveryRequirement;
+
 export interface StudioMilestone {
   readonly id: string;
   readonly title: string;
@@ -340,6 +347,8 @@ export interface StudioRun {
   readonly specification: string;
   /** Session that received this run's /studio planning packet, when prepared from Studio. */
   readonly coordinatorSessionId?: string;
+  /** Host-owned default delivery requirement for milestones appended to this run. */
+  readonly deliveryPolicy?: StudioRunDeliveryPolicy;
   /** Increments when Matthew or Lucy changes the active objective. */
   readonly specificationRevision?: number;
   readonly corrections?: readonly StudioCorrection[];
@@ -393,6 +402,9 @@ export function preserveStudioRunHistory(
   }
   if (next.milestones.length < current.milestones.length) {
     throw new Error("Existing Studio milestones cannot be removed.");
+  }
+  if ((next.deliveryPolicy ?? "github-pr") !== (current.deliveryPolicy ?? "github-pr")) {
+    throw new Error("The Studio run delivery policy is host-owned and immutable.");
   }
   const previousCorrections = current.corrections ?? [];
   const nextCorrections = next.corrections ?? [];
@@ -610,7 +622,8 @@ export function preserveStudioRunHistory(
         ? newCheckpoints
         : (milestone.githubCheckpoints ?? previous.githubCheckpoints);
     const resolvedLatest = resolvedCheckpoints?.at(-1);
-    const resolvedSha = resolvedLatest?.headSha ?? milestone.checkpointSha ?? previous.checkpointSha;
+    const resolvedSha =
+      resolvedLatest?.headSha ?? milestone.checkpointSha ?? previous.checkpointSha;
     const resolvedUrl =
       resolvedLatest?.pullRequestUrl ?? milestone.pullRequestUrl ?? previous.pullRequestUrl;
     const resolvedDeliveryRequirement =
@@ -719,7 +732,9 @@ export function isStudioMilestoneDependencySatisfied(milestone: StudioMilestone)
 
 export function availableStudioMilestones(run: StudioRun): readonly StudioMilestone[] {
   if (run.status !== "running") return [];
-  const milestonesById = new Map(run.milestones.map((milestone) => [milestone.id, milestone] as const));
+  const milestonesById = new Map(
+    run.milestones.map((milestone) => [milestone.id, milestone] as const),
+  );
   return run.milestones.filter(
     (milestone) =>
       milestone.status === "queued" &&
@@ -751,7 +766,11 @@ export function transitionStudioRun(
   }
   if (
     status === "completed" &&
-    run.milestones.some((milestone) => milestone.status !== "complete")
+    // Cancelled milestones are terminal (plan changes and stop both cancel work),
+    // so they do not keep a finished run from completing.
+    run.milestones.some(
+      (milestone) => milestone.status !== "complete" && milestone.status !== "cancelled",
+    )
   ) {
     throw new Error("A Studio run cannot complete while milestones remain unfinished.");
   }

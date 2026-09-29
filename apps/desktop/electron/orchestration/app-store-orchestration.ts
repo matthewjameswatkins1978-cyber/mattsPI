@@ -1951,6 +1951,7 @@ function formatCreateChildThreadResult(result: CreateChildThreadToolDetails): st
     (result.provider && result.modelId ? `\nmodel: ${result.provider}/${result.modelId}` : "") +
     (result.environment ? `\nenvironment: ${result.environment}` : "") +
     (result.branchName ? `\nbranch: ${result.branchName}` : "") +
+    (result.worktreePath ? `\nworktreePath: ${result.worktreePath}` : "") +
     (result.deliveryStatus ? `\ninitialPrompt: ${result.deliveryStatus}` : "")
   );
 }

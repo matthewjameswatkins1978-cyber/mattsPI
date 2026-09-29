@@ -1,5 +1,5 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import type { StudioRun } from "../../../contracts/studio-runs";
+import type { StudioRun, StudioRunDeliveryPolicy } from "../../../contracts/studio-runs";
 import { studioExternalReviewStatus, transitionStudioRun } from "../../../contracts/studio-runs";
 import type {
   DesktopAppState,
@@ -30,6 +30,7 @@ function createDraftRun(
   workspace: WorkspaceRecord,
   specification: string,
   mode: StudioRun["mode"],
+  deliveryPolicy: StudioRunDeliveryPolicy,
 ): StudioRun {
   const now = stamp();
   const runId = `studio-${crypto.randomUUID()}`;
@@ -39,6 +40,7 @@ function createDraftRun(
     repositoryPath: workspace.path,
     specification,
     mode,
+    deliveryPolicy,
     status: "draft",
     milestones: [
       {
@@ -49,7 +51,7 @@ function createDraftRun(
         status: "queued",
         workerThreadIds: [],
         worktreeIds: [],
-        deliveryRequirement: "github-pr",
+        deliveryRequirement: deliveryPolicy,
         updatedAt: now,
       },
     ],
@@ -72,6 +74,7 @@ export function StudioRunsView({
   const [workspaceId, setWorkspaceId] = useState(selectedWorkspaceId);
   const [specification, setSpecification] = useState("");
   const [mode, setMode] = useState<StudioRun["mode"]>("observed");
+  const [deliveryPolicy, setDeliveryPolicy] = useState<StudioRunDeliveryPolicy>("github-pr");
   const [busyRunId, setBusyRunId] = useState<string>();
   const [error, setError] = useState<string>();
   const [correctionText, setCorrectionText] = useState("");
@@ -95,7 +98,7 @@ export function StudioRunsView({
 
   const createPlan = async () => {
     if (!workspace || !specification.trim()) return;
-    const run = createDraftRun(workspace, specification.trim(), mode);
+    const run = createDraftRun(workspace, specification.trim(), mode, deliveryPolicy);
     await save(run);
     setSpecification("");
   };
@@ -104,7 +107,7 @@ export function StudioRunsView({
     const packet = specification.trim();
     if (!workspace || !packet || !selectedThreadTarget) return;
     const run = {
-      ...createDraftRun(workspace, packet, mode),
+      ...createDraftRun(workspace, packet, mode, deliveryPolicy),
       coordinatorSessionId: selectedThreadTarget.sessionId,
     };
     setBusyRunId(run.id);
@@ -326,6 +329,18 @@ export function StudioRunsView({
             </select>
           </label>
           <label className="studio-field">
+            <span>Delivery</span>
+            <select
+              value={deliveryPolicy}
+              onChange={(event) =>
+                setDeliveryPolicy(event.currentTarget.value as StudioRunDeliveryPolicy)
+              }
+            >
+              <option value="github-pr">GitHub pull request (default)</option>
+              <option value="local">Local-only demonstration</option>
+            </select>
+          </label>
+          <label className="studio-field">
             <span>Specification or implementation packet</span>
             <textarea
               rows={7}
@@ -364,7 +379,10 @@ export function StudioRunsView({
           <p className="studio-note">
             Preparing stores the draft and fills the selected project thread with a /studio command.
             It does not send the command. Check the selected model, then send it when you are ready.
-            This handoff is available in Observed mode.
+            This handoff is available in Observed mode. Delivery policy is recorded once at creation
+            and is host-owned: milestones appended later inherit it. Local-only delivery is an
+            authorised demonstration route; dependent milestones then unlock on internally verified
+            local completion instead of an observed GitHub merge.
           </p>
         </section>
 
@@ -381,6 +399,10 @@ export function StudioRunsView({
                   <h3>{run.milestones[0]?.title ?? "Project run"}</h3>
                   <p>
                     {run.mode === "observed" ? "Observed" : "Autonomous"} · {run.status}
+                    {" · "}
+                    {(run.deliveryPolicy ?? "github-pr") === "local"
+                      ? "Local-only delivery"
+                      : "GitHub PR delivery"}
                   </p>
                 </div>
                 <span className="studio-run__revision">Revision {run.revision}</span>

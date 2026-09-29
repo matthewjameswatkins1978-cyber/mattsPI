@@ -238,17 +238,11 @@ test.describe("Studio run plan state", () => {
       preserveStudioRunHistory(
         {
           ...current,
-          milestones: [
-            { ...milestone, deliveryRequirement: "github-pr" },
-            current.milestones[1]!,
-          ],
+          milestones: [{ ...milestone, deliveryRequirement: "github-pr" }, current.milestones[1]!],
         },
         {
           ...current,
-          milestones: [
-            { ...milestone, deliveryRequirement: "local" },
-            current.milestones[1]!,
-          ],
+          milestones: [{ ...milestone, deliveryRequirement: "local" }, current.milestones[1]!],
         },
       ),
     ).toThrow("identities and dependencies are immutable");
@@ -540,9 +534,9 @@ test.describe("Studio run plan state", () => {
     expect(availableStudioMilestones(completed)).toEqual([]);
 
     // 2. Newly planned run requires deliveryRequirement on every milestone
-    expect(() =>
-      preserveStudioRunHistory(undefined, omittedRun),
-    ).toThrow("Every newly planned milestone must declare a delivery requirement");
+    expect(() => preserveStudioRunHistory(undefined, omittedRun)).toThrow(
+      "Every newly planned milestone must declare a delivery requirement",
+    );
 
     // 3. Appending a milestone without deliveryRequirement is rejected
     expect(() =>
@@ -667,10 +661,7 @@ test.describe("Studio run plan state", () => {
   test("rejects attempted delivery requirement changes on existing milestones", () => {
     const currentRun: StudioRun = {
       ...run,
-      milestones: [
-        { ...run.milestones[0]!, deliveryRequirement: "github-pr" },
-        run.milestones[1]!,
-      ],
+      milestones: [{ ...run.milestones[0]!, deliveryRequirement: "github-pr" }, run.milestones[1]!],
     };
 
     // Changing from github-pr to local
@@ -687,10 +678,7 @@ test.describe("Studio run plan state", () => {
     // Changing from local to github-pr
     const localRun: StudioRun = {
       ...run,
-      milestones: [
-        { ...run.milestones[0]!, deliveryRequirement: "local" },
-        run.milestones[1]!,
-      ],
+      milestones: [{ ...run.milestones[0]!, deliveryRequirement: "local" }, run.milestones[1]!],
     };
     expect(() =>
       preserveStudioRunHistory(localRun, {
@@ -710,6 +698,45 @@ test.describe("Studio run plan state", () => {
     const stopped = transitionStudioRun(run, "stopped");
     expect(stopped.milestones.map(({ status }) => status)).toEqual(["cancelled", "cancelled"]);
     expect(() => transitionStudioRun(stopped, "running")).toThrow("terminal");
+  });
+
+  test("treats the host-owned run delivery policy as immutable and decodable", () => {
+    const localRun: StudioRun = { ...run, deliveryPolicy: "local" };
+    expect(decodeStudioRunsFile({ version: 1, runs: [localRun] }).runs[0]).toEqual({
+      ...localRun,
+      specificationRevision: 1,
+      corrections: [],
+    });
+    expect(() =>
+      decodeStudioRunsFile({ version: 1, runs: [{ ...run, deliveryPolicy: "hostile" }] }),
+    ).toThrow("deliveryPolicy");
+    // A later save cannot flip an authorised local-only run to GitHub delivery…
+    expect(() =>
+      preserveStudioRunHistory(localRun, { ...localRun, deliveryPolicy: "github-pr" }),
+    ).toThrow("delivery policy is host-owned and immutable");
+    // …and cannot silently upgrade a GitHub-delivery run to local-only.
+    expect(() => preserveStudioRunHistory(run, { ...run, deliveryPolicy: "local" })).toThrow(
+      "delivery policy is host-owned and immutable",
+    );
+    // Omitting the field preserves the effective default policy.
+    expect(preserveStudioRunHistory(localRun, { ...localRun }).deliveryPolicy).toBe("local");
+    expect(preserveStudioRunHistory(run, { ...run }).deliveryPolicy).toBeUndefined();
+  });
+
+  test("lets a run complete when remaining milestones are terminally cancelled", () => {
+    const cancelled = transitionStudioMilestone(run, "m2", "cancelled");
+    const completedM1 = transitionStudioMilestone(
+      transitionStudioMilestone(
+        transitionStudioMilestone(cancelled, "m1", "running"),
+        "m1",
+        "verifying",
+      ),
+      "m1",
+      "complete",
+    );
+    const finished = transitionStudioRun(completedM1, "completed");
+    expect(finished.status).toBe("completed");
+    expect(finished.milestones.map(({ status }) => status)).toEqual(["complete", "cancelled"]);
   });
 
   test("restart recovery pauses only running plans and is safe to repeat", () => {

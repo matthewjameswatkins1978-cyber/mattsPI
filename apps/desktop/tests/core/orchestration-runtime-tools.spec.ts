@@ -190,6 +190,22 @@ test("Studio plan tools persist a project run and restore it after app restart",
       (await getDesktopState(window)).studioRuns.find(({ id }) => id === modelClaimedLocal.id)
         ?.milestones[0]?.deliveryRequirement,
     ).toBe("github-pr");
+    const modelClaimedLocalPolicy = {
+      ...run,
+      id: "studio-local-run-policy-attempt",
+      deliveryPolicy: "local" as const,
+    };
+    await runOrchestrationRuntimeTool(harness, {
+      toolName: "save_studio_run",
+      toolCallId: "save-studio-local-run-policy-attempt",
+      sessionRef: parentRef,
+      params: { run: modelClaimedLocalPolicy },
+    });
+    const forgedPolicyRun = (await getDesktopState(window)).studioRuns.find(
+      ({ id }) => id === modelClaimedLocalPolicy.id,
+    );
+    expect(forgedPolicyRun?.deliveryPolicy).toBe("github-pr");
+    expect(forgedPolicyRun?.milestones[0]?.deliveryRequirement).toBe("github-pr");
     const forgedCorrection = recordStudioCorrection(run, {
       id: "model-forged-correction",
       instruction: "A model must not attribute this to Matthew.",
@@ -232,6 +248,11 @@ test("Studio plan tools persist a project run and restore it after app restart",
         runs: [
           expect.objectContaining({ id: run.id, revision: 1 }),
           expect.objectContaining({ id: modelClaimedLocal.id, revision: 1 }),
+          expect.objectContaining({
+            id: modelClaimedLocalPolicy.id,
+            revision: 1,
+            deliveryPolicy: "github-pr",
+          }),
         ],
       },
     );

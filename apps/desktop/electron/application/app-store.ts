@@ -1251,19 +1251,43 @@ export class DesktopAppStore {
     return state;
   }
 
-  async saveStudioRun(inputRun: StudioRun): Promise<DesktopAppState> {
+  /**
+   * Persist a Studio run. `source` distinguishes the authorised renderer UI path
+   * ("ui") from the model-facing save_studio_run bridge ("model", default).
+   * Delivery policy and the coordinator binding are host-owned: only an explicit
+   * UI creation may choose a local-only demonstration policy, model saves can
+   * never introduce or change it, and both are preserved across later saves.
+   */
+  async saveStudioRun(
+    inputRun: StudioRun,
+    options: { readonly source?: "ui" | "model" } = {},
+  ): Promise<DesktopAppState> {
     await this.initialize();
     const current = this.state.studioRuns.find(({ id }) => id === inputRun.id);
+    const deliveryPolicy =
+      current?.deliveryPolicy ??
+      (options.source === "ui" && inputRun.deliveryPolicy === "local" ? "local" : "github-pr");
     const milestones = inputRun.milestones.map((milestone) => {
       const previous = current?.milestones.find(({ id }) => id === milestone.id);
       return {
         ...milestone,
         // Delivery policy is host-owned. Preserve existing policy and make new
-        // milestones wait for observed GitHub merge evidence before dependants run.
-        deliveryRequirement: previous?.deliveryRequirement ?? "github-pr",
+        // milestones follow the run's authorised policy; absent one, they wait
+        // for observed GitHub merge evidence before dependants run.
+        deliveryRequirement: previous?.deliveryRequirement ?? deliveryPolicy,
       };
     });
-    return this.persistStudioRun({ ...inputRun, milestones }, "none");
+    return this.persistStudioRun(
+      {
+        ...inputRun,
+        ...(current?.coordinatorSessionId
+          ? { coordinatorSessionId: current.coordinatorSessionId }
+          : {}),
+        deliveryPolicy,
+        milestones,
+      },
+      "none",
+    );
   }
 
   async recordStudioCorrection(input: RecordStudioCorrectionInput): Promise<DesktopAppState> {
@@ -1343,7 +1367,13 @@ export class DesktopAppStore {
         throw new Error("Studio milestone status changes must follow the run lifecycle.");
       }
     }
-    assertNewStudioMilestoneCompletionsHaveEvidence(current, run, this.state.orchestrationChildren);
+    // Child evidence is derived from live transcripts. Re-project it here so the
+    // gate never consults a stale projection: concurrent child-session events can
+    // transiently overwrite derived parent-observation evidence until the next
+    // projection pass.
+    const projectedChildren = this.orchestrationOwner.projectOrchestrationChildren();
+    this.state = { ...this.state, orchestrationChildren: projectedChildren };
+    assertNewStudioMilestoneCompletionsHaveEvidence(current, run, projectedChildren);
     const runs = current
       ? this.state.studioRuns.map((entry) => (entry.id === run.id ? run : entry))
       : [...this.state.studioRuns, run];
