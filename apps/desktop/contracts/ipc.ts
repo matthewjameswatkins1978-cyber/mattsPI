@@ -15,7 +15,7 @@ import type {
 import type { ClipboardImageRead } from "./composer-attachments";
 import type { SessionRef } from "@pi-gui/session-driver/types";
 import type { SaveTaskWorkbenchTemplateInput, TaskWorkbenchTemplate } from "./workbench";
-import type { StudioRun } from "./studio-runs";
+import type { ConfirmStudioExternalReviewInput, StudioRun } from "./studio-runs";
 import type {
   TurnChangesInput,
   TurnChangesResult,
@@ -115,6 +115,7 @@ export const desktopIpc = {
   sendChildThreadFollowUp: "pi-gui:send-child-thread-follow-up",
   setChildSupervisionLoop: "pi-gui:set-child-supervision-loop",
   saveStudioRun: "pi-gui:save-studio-run",
+  confirmStudioExternalReview: "pi-gui:confirm-studio-external-review",
   submitComposerToTarget: "pi-gui:submit-composer-to-target",
   createScheduledTask: "pi-gui:create-scheduled-task",
   updateScheduledTask: "pi-gui:update-scheduled-task",
@@ -691,6 +692,7 @@ export interface PiDesktopApi {
   sendChildThreadFollowUp(input: SendChildThreadFollowUpInput): Promise<DesktopAppState>;
   setChildSupervisionLoop(input: SetChildSupervisionLoopInput): Promise<DesktopAppState>;
   saveStudioRun(run: StudioRun): Promise<DesktopAppState>;
+  confirmStudioExternalReview(input: ConfirmStudioExternalReviewInput): Promise<DesktopAppState>;
   createScheduledTask(input: CreateScheduledTaskInput): Promise<DesktopAppState>;
   updateScheduledTask(id: string, patch: UpdateScheduledTaskInput): Promise<DesktopAppState>;
   deleteScheduledTask(id: string): Promise<DesktopAppState>;

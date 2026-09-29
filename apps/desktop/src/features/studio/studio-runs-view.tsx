@@ -1,6 +1,10 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import type { StudioRun } from "../../../contracts/studio-runs";
-import { recordStudioCorrection, transitionStudioRun } from "../../../contracts/studio-runs";
+import {
+  recordStudioCorrection,
+  studioExternalReviewStatus,
+  transitionStudioRun,
+} from "../../../contracts/studio-runs";
 import type {
   DesktopAppState,
   WorkspaceRecord,
@@ -218,6 +222,38 @@ export function StudioRunsView({
     }
   };
 
+  const confirmLucyDecision = async (
+    run: StudioRun,
+    milestoneId: string,
+    headSha: string,
+    decision: "accepted" | "changes-requested",
+  ) => {
+    const decisionLabel = decision === "accepted" ? "ACCEPT" : "CHANGES REQUESTED";
+    if (
+      !window.confirm(
+        `Confirm Lucy's ${decisionLabel} for exactly this pushed HEAD SHA?\n\n${headSha}\n\nPi will record your confirmation. It will not mark the PR merged.`,
+      )
+    ) {
+      return;
+    }
+    setBusyRunId(run.id);
+    setError(undefined);
+    try {
+      await updateSnapshot(setSnapshot, () =>
+        api.confirmStudioExternalReview({
+          runId: run.id,
+          milestoneId,
+          reviewedHeadSha: headSha,
+          decision,
+        }),
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Studio could not record Lucy's decision.");
+    } finally {
+      setBusyRunId(undefined);
+    }
+  };
+
   return (
     <section className="canvas studio-runs-view" data-testid="studio-runs-view">
       <header className="view-header">
@@ -326,11 +362,61 @@ export function StudioRunsView({
                 </ol>
               ) : null}
               <ol>
-                {run.milestones.map((milestone) => (
-                  <li key={milestone.id}>
-                    {milestone.title} <span>· {milestone.status}</span>
-                  </li>
-                ))}
+                {run.milestones.map((milestone) => {
+                  const checkpoint = milestone.githubCheckpoints?.at(-1);
+                  const reviewStatus = checkpoint
+                    ? studioExternalReviewStatus(milestone, checkpoint.headSha)
+                    : undefined;
+                  return (
+                    <li key={milestone.id}>
+                      {milestone.title} <span>· {milestone.status}</span>
+                      {checkpoint ? (
+                        <div
+                          className="studio-run__review"
+                          data-testid="studio-review-confirmation"
+                        >
+                          <p>
+                            GitHub review · {reviewStatus} · HEAD <code>{checkpoint.headSha}</code>
+                          </p>
+                          <button
+                            className="button"
+                            disabled={Boolean(busyRunId) || reviewStatus === "accepted"}
+                            onClick={() => {
+                              confirmLucyDecision(
+                                run,
+                                milestone.id,
+                                checkpoint.headSha,
+                                "accepted",
+                              ).catch(() => undefined);
+                            }}
+                            type="button"
+                          >
+                            Confirm Lucy ACCEPT for this SHA
+                          </button>
+                          <button
+                            className="button"
+                            disabled={Boolean(busyRunId) || reviewStatus === "changes-requested"}
+                            onClick={() => {
+                              confirmLucyDecision(
+                                run,
+                                milestone.id,
+                                checkpoint.headSha,
+                                "changes-requested",
+                              ).catch(() => undefined);
+                            }}
+                            type="button"
+                          >
+                            Record Lucy changes requested
+                          </button>
+                          <p className="studio-note">
+                            Confirmation is recorded for this exact SHA. Merge status remains
+                            unavailable until Pi observes GitHub directly.
+                          </p>
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ol>
               <div className="studio-run__actions">
                 {run.status !== "stopped" &&

@@ -68,8 +68,13 @@ import {
   type ScheduledTaskRecord,
   type UpdateScheduledTaskInput,
 } from "../../contracts/desktop-state";
-import type { StudioRun } from "../../contracts/studio-runs";
-import { transitionStudioMilestone, transitionStudioRun } from "../../contracts/studio-runs";
+import type { ConfirmStudioExternalReviewInput, StudioRun } from "../../contracts/studio-runs";
+import {
+  preserveStudioRunHistory,
+  recordStudioGitHubReview,
+  transitionStudioMilestone,
+  transitionStudioRun,
+} from "../../contracts/studio-runs";
 import {
   applyTimelineEvent,
   appendAssistantDelta,
@@ -1235,14 +1240,22 @@ export class DesktopAppStore {
     return state;
   }
 
-  async saveStudioRun(run: StudioRun): Promise<DesktopAppState> {
+  async saveStudioRun(inputRun: StudioRun): Promise<DesktopAppState> {
+    return this.persistStudioRun(inputRun, false);
+  }
+
+  private async persistStudioRun(
+    inputRun: StudioRun,
+    allowGitHubEvidenceAppend: boolean,
+  ): Promise<DesktopAppState> {
     await this.initialize();
+    const current = this.state.studioRuns.find(({ id }) => id === inputRun.id);
+    const run = preserveStudioRunHistory(current, inputRun, allowGitHubEvidenceAppend);
     const rootWorkspaceId = resolveRepoWorkspaceId(this.state.workspaces, run.workspaceId);
     const root = this.state.workspaces.find(({ id }) => id === rootWorkspaceId);
     if (!root || resolve(root.path).toLowerCase() !== resolve(run.repositoryPath).toLowerCase()) {
       throw new Error("Studio run must target its project's root repository.");
     }
-    const current = this.state.studioRuns.find(({ id }) => id === run.id);
     if (
       current &&
       (current.workspaceId !== run.workspaceId || run.revision !== current.revision + 1)
@@ -1269,6 +1282,7 @@ export class DesktopAppStore {
       } else if (current.status === "running") {
         const changed = run.milestones.filter(
           (milestone) =>
+            current.milestones.some(({ id }) => id === milestone.id) &&
             current.milestones.find(({ id }) => id === milestone.id)?.status !== milestone.status,
         );
         if (changed.length > 1)
@@ -1286,7 +1300,11 @@ export class DesktopAppStore {
         permittedMilestones.map(({ id, status }) => [id, status] as const),
       );
       if (
-        run.milestones.some((milestone) => permittedById.get(milestone.id) !== milestone.status)
+        run.milestones.some((milestone, index) =>
+          index < current.milestones.length
+            ? permittedById.get(milestone.id) !== milestone.status
+            : milestone.status !== "queued",
+        )
       ) {
         throw new Error("Studio milestone status changes must follow the run lifecycle.");
       }
@@ -1304,6 +1322,38 @@ export class DesktopAppStore {
     };
     this.emit();
     return this.getState();
+  }
+
+  /** Explicit UI confirmation path; model-facing save_studio_run never calls this method. */
+  async confirmStudioExternalReview(
+    input: ConfirmStudioExternalReviewInput,
+  ): Promise<DesktopAppState> {
+    await this.initialize();
+    const currentRun = this.state.studioRuns.find(({ id }) => id === input.runId);
+    const currentMilestone = currentRun?.milestones.find(({ id }) => id === input.milestoneId);
+    const latestCheckpoint = currentMilestone?.githubCheckpoints?.at(-1);
+    if (!currentRun || !currentMilestone || !latestCheckpoint) {
+      throw new Error("Lucy review can be recorded only for a saved GitHub checkpoint.");
+    }
+    if (latestCheckpoint.headSha.toLowerCase() !== input.reviewedHeadSha.toLowerCase()) {
+      throw new Error("Lucy review must confirm the latest exact pushed HEAD SHA.");
+    }
+    const reviewedMilestone = recordStudioGitHubReview(currentMilestone, {
+      headSha: input.reviewedHeadSha,
+      decision: input.decision,
+    });
+    if (reviewedMilestone === currentMilestone) return this.getState();
+    return this.persistStudioRun(
+      {
+        ...currentRun,
+        milestones: currentRun.milestones.map((milestone) =>
+          milestone.id === currentMilestone.id ? reviewedMilestone : milestone,
+        ),
+        revision: currentRun.revision + 1,
+        updatedAt: reviewedMilestone.updatedAt,
+      },
+      true,
+    );
   }
 
   async listStudioRuns(workspaceId: string): Promise<readonly StudioRun[]> {

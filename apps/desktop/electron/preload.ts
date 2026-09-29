@@ -27,7 +27,7 @@ import {
 } from "../contracts/ipc";
 import type { ClipboardImageRead } from "../contracts/composer-attachments";
 import type { SaveTaskWorkbenchTemplateInput, TaskWorkbenchTemplate } from "../contracts/workbench";
-import type { StudioRun } from "../contracts/studio-runs";
+import type { ConfirmStudioExternalReviewInput, StudioRun } from "../contracts/studio-runs";
 import type {
   TurnChangesInput,
   TurnChangesResult,
@@ -244,6 +244,8 @@ contextBridge.exposeInMainWorld("piApp", {
     ipcRenderer.invoke(desktopIpc.setChildSupervisionLoop, input) as Promise<DesktopAppState>,
   saveStudioRun: (run: StudioRun) =>
     ipcRenderer.invoke(desktopIpc.saveStudioRun, run) as Promise<DesktopAppState>,
+  confirmStudioExternalReview: (input: ConfirmStudioExternalReviewInput) =>
+    ipcRenderer.invoke(desktopIpc.confirmStudioExternalReview, input) as Promise<DesktopAppState>,
   submitComposerToTarget: (text: string, target: WorkspaceSessionTarget, options) =>
     ipcRenderer.invoke(
       desktopIpc.submitComposerToTarget,

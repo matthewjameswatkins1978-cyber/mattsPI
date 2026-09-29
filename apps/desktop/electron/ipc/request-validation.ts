@@ -37,6 +37,7 @@ import {
   decodeTaskWorkbenchTemplate,
   type SaveTaskWorkbenchTemplateInput,
 } from "../../contracts/workbench";
+import type { ConfirmStudioExternalReviewInput } from "../../contracts/studio-runs";
 
 export function expectSaveTaskWorkbenchTemplateInput(
   value: unknown,
@@ -72,6 +73,28 @@ export function expectNonEmptyString(value: unknown, name: string): string {
     throw new TypeError(`${name} must not be empty`);
   }
   return parsed;
+}
+
+export function expectConfirmStudioExternalReviewInput(
+  value: unknown,
+): ConfirmStudioExternalReviewInput {
+  const input = expectRecord(value, "Studio Lucy review confirmation");
+  if (
+    Object.keys(input).some(
+      (key) => !["runId", "milestoneId", "reviewedHeadSha", "decision"].includes(key),
+    )
+  ) {
+    throw new TypeError("Studio Lucy review confirmation contains unsupported fields.");
+  }
+  if (input.decision !== "accepted" && input.decision !== "changes-requested") {
+    throw new TypeError("Studio Lucy review decision must be accepted or changes-requested.");
+  }
+  return {
+    runId: expectNonEmptyString(input.runId, "runId"),
+    milestoneId: expectNonEmptyString(input.milestoneId, "milestoneId"),
+    reviewedHeadSha: expectNonEmptyString(input.reviewedHeadSha, "reviewedHeadSha"),
+    decision: input.decision,
+  };
 }
 
 export function expectOptionalString(value: unknown, name: string): string | undefined {

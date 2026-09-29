@@ -11,12 +11,19 @@ export type StudioMilestoneStatus =
 
 export type StudioExternalReviewDecision = "changes-requested" | "accepted" | "merged";
 
+export interface ConfirmStudioExternalReviewInput {
+  readonly runId: string;
+  readonly milestoneId: string;
+  readonly reviewedHeadSha: string;
+  readonly decision: "changes-requested" | "accepted";
+}
+
 export interface StudioGitHubReview {
   readonly decision: StudioExternalReviewDecision;
   readonly reviewedHeadSha: string;
   readonly recordedAt: string;
-  /** Merged is recorded only from a GitHub API observation, never from pasted approval. */
-  readonly source: "matthew" | "github-api";
+  /** Legacy claims remain readable but are never authoritative. */
+  readonly source: "matthew-confirmed-lucy" | "legacy-unverified";
   readonly mergeCommitSha?: string;
   readonly mergedAt?: string;
 }
@@ -32,7 +39,7 @@ export interface StudioGitHubCheckpoint {
 }
 
 export type StudioExternalReviewStatus =
-  "awaiting-lucy" | "changes-requested" | "accepted" | "merged" | "superseded";
+  "awaiting-lucy" | "changes-requested" | "accepted" | "superseded";
 
 export interface StudioMilestone {
   readonly id: string;
@@ -65,8 +72,20 @@ export function recordStudioGitHubCheckpoint(
     throw new Error("GitHub checkpoint requires a pull request URL.");
   }
   const checkpoints = milestone.githubCheckpoints ?? [];
-  if (checkpoints.some(({ headSha }) => headSha.toLowerCase() === input.headSha.toLowerCase())) {
-    throw new Error("This pushed HEAD SHA is already recorded for the milestone.");
+  const existing = checkpoints.find(
+    ({ headSha }) => headSha.toLowerCase() === input.headSha.toLowerCase(),
+  );
+  if (existing) {
+    if (
+      existing.repository !== input.repository ||
+      existing.branch !== input.branch ||
+      existing.pullRequestUrl !== input.pullRequestUrl ||
+      existing.baseSha !== input.baseSha ||
+      existing.pushedAt !== input.pushedAt
+    ) {
+      throw new Error("An existing GitHub checkpoint SHA cannot be rewritten.");
+    }
+    return milestone;
   }
   const { now, ...checkpoint } = input;
   const newCheckpoint: StudioGitHubCheckpoint = { ...checkpoint, reviewHistory: [] };
@@ -79,7 +98,7 @@ export function recordStudioGitHubCheckpoint(
   };
 }
 
-/** Records Matthew's exact-SHA review decision; merge requires separate GitHub evidence. */
+/** Records an explicitly confirmed Lucy decision for the exact checkpoint SHA. */
 export function recordStudioGitHubReview(
   milestone: StudioMilestone,
   input: {
@@ -94,6 +113,10 @@ export function recordStudioGitHubReview(
   );
   if (index < 0) throw new Error("Review must name an exactly recorded checkpoint SHA.");
   const checkpoint = checkpoints[index]!;
+  const latestTrusted = [...checkpoint.reviewHistory]
+    .reverse()
+    .find(({ source }) => source === "matthew-confirmed-lucy");
+  if (latestTrusted?.decision === input.decision) return milestone;
   checkpoints[index] = {
     ...checkpoint,
     reviewHistory: [
@@ -102,7 +125,7 @@ export function recordStudioGitHubReview(
         decision: input.decision,
         reviewedHeadSha: input.headSha,
         recordedAt: input.now ?? new Date().toISOString(),
-        source: "matthew",
+        source: "matthew-confirmed-lucy",
       },
     ],
   };
@@ -113,61 +136,28 @@ export function recordStudioGitHubReview(
   };
 }
 
-/** Only a GitHub API observation carrying merge metadata can establish merged state. */
-export function recordStudioGitHubMerge(
-  milestone: StudioMilestone,
-  input: {
-    readonly headSha: string;
-    readonly mergeCommitSha: string;
-    readonly mergedAt: string;
-    readonly observedAt?: string;
-  },
-): StudioMilestone {
-  if (!validSha(input.mergeCommitSha))
-    throw new Error("GitHub merge requires a full merge commit SHA.");
-  const checkpoints = [...(milestone.githubCheckpoints ?? [])];
-  const index = checkpoints.findIndex(
-    ({ headSha }) => headSha.toLowerCase() === input.headSha.toLowerCase(),
-  );
-  if (index < 0) throw new Error("Merge must match an exactly recorded checkpoint SHA.");
-  const checkpoint = checkpoints[index]!;
-  checkpoints[index] = {
-    ...checkpoint,
-    reviewHistory: [
-      ...checkpoint.reviewHistory,
-      {
-        decision: "merged",
-        reviewedHeadSha: input.headSha,
-        recordedAt: input.observedAt ?? new Date().toISOString(),
-        source: "github-api",
-        mergeCommitSha: input.mergeCommitSha,
-        mergedAt: input.mergedAt,
-      },
-    ],
-  };
-  return {
-    ...milestone,
-    githubCheckpoints: checkpoints,
-    updatedAt: input.observedAt ?? new Date().toISOString(),
-  };
-}
-
 export function studioExternalReviewStatus(
   milestone: StudioMilestone,
   headSha: string,
 ): StudioExternalReviewStatus {
   const checkpoints = milestone.githubCheckpoints ?? [];
-  const index = checkpoints.findIndex(
-    ({ headSha: sha }) => sha.toLowerCase() === headSha.toLowerCase(),
-  );
+  const reverseIndex = [...checkpoints]
+    .reverse()
+    .findIndex(({ headSha: sha }) => sha.toLowerCase() === headSha.toLowerCase());
+  const index = reverseIndex < 0 ? -1 : checkpoints.length - 1 - reverseIndex;
   if (index < 0) throw new Error("Unknown GitHub checkpoint SHA.");
   if (index !== checkpoints.length - 1) return "superseded";
   const checkpoint = checkpoints[index]!;
-  const review = [...checkpoint.reviewHistory]
-    .reverse()
-    .find(
-      ({ reviewedHeadSha }) => reviewedHeadSha.toLowerCase() === checkpoint.headSha.toLowerCase(),
-    );
+  const review = [...checkpoint.reviewHistory].reverse().find(
+    (
+      candidate,
+    ): candidate is StudioGitHubReview & {
+      decision: "changes-requested" | "accepted";
+    } =>
+      candidate.source === "matthew-confirmed-lucy" &&
+      candidate.decision !== "merged" &&
+      candidate.reviewedHeadSha.toLowerCase() === checkpoint.headSha.toLowerCase(),
+  );
   return review?.decision ?? "awaiting-lucy";
 }
 
@@ -197,6 +187,144 @@ export interface StudioRun {
   readonly updatedAt: string;
   readonly revision: number;
   readonly lastError?: string;
+}
+
+/** Model-authored saves may append milestones, but cannot rewrite plan identity or persisted history. */
+export function preserveStudioRunHistory(
+  current: StudioRun | undefined,
+  next: StudioRun,
+  allowGitHubEvidenceAppend = false,
+): StudioRun {
+  if (!current) {
+    if (
+      next.milestones.some(({ githubCheckpoints }) =>
+        (githubCheckpoints ?? []).some(({ reviewHistory }) => reviewHistory.length > 0),
+      )
+    ) {
+      throw new Error("GitHub review evidence requires its authorised confirmation path.");
+    }
+    return next;
+  }
+  if (next.milestones.length < current.milestones.length) {
+    throw new Error("Existing Studio milestones cannot be removed.");
+  }
+  const milestones = next.milestones.map((milestone, index) => {
+    const previous = current.milestones[index];
+    if (!previous) {
+      if (
+        (milestone.githubCheckpoints ?? []).some(({ reviewHistory }) => reviewHistory.length > 0)
+      ) {
+        throw new Error("GitHub review evidence requires its authorised confirmation path.");
+      }
+      return milestone;
+    }
+    if (
+      milestone.id !== previous.id ||
+      milestone.title !== previous.title ||
+      milestone.instruction !== previous.instruction ||
+      JSON.stringify(milestone.dependsOn) !== JSON.stringify(previous.dependsOn)
+    ) {
+      throw new Error("Existing Studio milestone identities and dependencies are immutable.");
+    }
+    if (
+      !isPrefix(previous.workerThreadIds, milestone.workerThreadIds) ||
+      !isPrefix(previous.worktreeIds, milestone.worktreeIds)
+    ) {
+      throw new Error(
+        "Existing Studio worker and worktree history cannot be removed or reordered.",
+      );
+    }
+    if (
+      (previous.githubCheckpoints?.length ?? 0) > 0 &&
+      milestone.githubCheckpoints === undefined
+    ) {
+      throw new Error("Existing GitHub checkpoint and review history cannot be deleted.");
+    }
+    const oldCheckpoints = previous.githubCheckpoints ?? [];
+    const newCheckpoints = milestone.githubCheckpoints ?? [];
+    if (newCheckpoints.length < oldCheckpoints.length) {
+      throw new Error("Existing GitHub checkpoint and review history cannot be deleted.");
+    }
+    for (let checkpointIndex = 0; checkpointIndex < oldCheckpoints.length; checkpointIndex += 1) {
+      const oldCheckpoint = oldCheckpoints[checkpointIndex]!;
+      const newCheckpoint = newCheckpoints[checkpointIndex];
+      if (!newCheckpoint || !sameCheckpointIdentity(oldCheckpoint, newCheckpoint)) {
+        throw new Error("Existing GitHub checkpoint identity is immutable.");
+      }
+      const oldReviews = oldCheckpoint.reviewHistory;
+      const newReviews = newCheckpoint.reviewHistory;
+      if (
+        newReviews.length < oldReviews.length ||
+        !oldReviews.every(
+          (review, reviewIndex) =>
+            JSON.stringify(review) === JSON.stringify(newReviews[reviewIndex]),
+        )
+      ) {
+        throw new Error("Existing GitHub review history cannot be deleted or rewritten.");
+      }
+      const appendedReviews = newReviews.slice(oldReviews.length);
+      if (
+        appendedReviews.length > 0 &&
+        (!allowGitHubEvidenceAppend ||
+          appendedReviews.some(
+            ({ source, decision, reviewedHeadSha }) =>
+              source !== "matthew-confirmed-lucy" ||
+              decision === "merged" ||
+              reviewedHeadSha.toLowerCase() !== oldCheckpoint.headSha.toLowerCase(),
+          ))
+      ) {
+        throw new Error("GitHub review evidence requires its authorised confirmation path.");
+      }
+    }
+    for (const checkpoint of newCheckpoints.slice(oldCheckpoints.length)) {
+      if (checkpoint.reviewHistory.length > 0) {
+        throw new Error("GitHub review evidence requires its authorised confirmation path.");
+      }
+    }
+    if (
+      milestone.checkpointSha !== undefined &&
+      milestone.checkpointSha !== previous.checkpointSha
+    ) {
+      throw new Error("Existing GitHub checkpoint identity is immutable.");
+    }
+    if (
+      milestone.pullRequestUrl !== undefined &&
+      milestone.pullRequestUrl !== previous.pullRequestUrl
+    ) {
+      throw new Error("Existing GitHub checkpoint identity is immutable.");
+    }
+    return {
+      ...milestone,
+      ...((milestone.githubCheckpoints ?? previous.githubCheckpoints)
+        ? { githubCheckpoints: milestone.githubCheckpoints ?? previous.githubCheckpoints }
+        : {}),
+      ...((milestone.checkpointSha ?? previous.checkpointSha)
+        ? { checkpointSha: milestone.checkpointSha ?? previous.checkpointSha }
+        : {}),
+      ...((milestone.pullRequestUrl ?? previous.pullRequestUrl)
+        ? { pullRequestUrl: milestone.pullRequestUrl ?? previous.pullRequestUrl }
+        : {}),
+    };
+  });
+  return { ...next, milestones };
+}
+
+function sameCheckpointIdentity(
+  left: StudioGitHubCheckpoint,
+  right: StudioGitHubCheckpoint,
+): boolean {
+  return (
+    left.repository === right.repository &&
+    left.branch === right.branch &&
+    left.pullRequestUrl === right.pullRequestUrl &&
+    left.baseSha === right.baseSha &&
+    left.headSha === right.headSha &&
+    left.pushedAt === right.pushedAt
+  );
+}
+
+function isPrefix(previous: readonly string[], next: readonly string[]): boolean {
+  return previous.length <= next.length && previous.every((value, index) => next[index] === value);
 }
 
 export function recordStudioCorrection(

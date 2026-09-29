@@ -31,6 +31,7 @@ import { decodeStudioRunsFile } from "../studio/studio-run-store";
 import {
   expectAppView,
   expectBoolean,
+  expectConfirmStudioExternalReviewInput,
   expectComposerAttachments,
   expectCreateSessionInput,
   expectCreateWorktreeInput,
@@ -131,7 +132,7 @@ type ScheduledTaskOwner = Pick<
   | "beginScheduledTaskInterview"
 >;
 
-type StudioRunsOwner = Pick<DesktopAppStore, "saveStudioRun">;
+type StudioRunsOwner = Pick<DesktopAppStore, "saveStudioRun" | "confirmStudioExternalReview">;
 
 type SettingsOwner = Pick<
   DesktopAppStore,
@@ -640,6 +641,13 @@ export function registerDesktopIpc({
       const checked = decodeStudioRunsFile({ version: 1, runs: [rawRun] });
       return owners.studioRuns.saveStudioRun(checked.runs[0]!);
     }),
+  );
+  ipcMain.handle(desktopIpc.confirmStudioExternalReview, (event, rawInput: unknown) =>
+    run(event, () =>
+      owners.studioRuns.confirmStudioExternalReview(
+        expectConfirmStudioExternalReviewInput(rawInput),
+      ),
+    ),
   );
   ipcMain.handle(desktopIpc.createScheduledTask, (event, rawInput: unknown) =>
     run(event, () =>

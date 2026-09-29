@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 import {
   availableStudioMilestones,
+  preserveStudioRunHistory,
   recordStudioGitHubCheckpoint,
-  recordStudioGitHubMerge,
   recordStudioGitHubReview,
   recordStudioCorrection,
   studioExternalReviewStatus,
@@ -51,7 +51,6 @@ test.describe("Studio run plan state", () => {
     const baseSha = "a".repeat(40);
     const firstSha = "b".repeat(40);
     const secondSha = "c".repeat(40);
-    const mergeSha = "d".repeat(40);
     const [queued] = run.milestones;
     const internalComplete = { ...queued, status: "complete" as const };
     expect(internalComplete.status).toBe("complete");
@@ -70,6 +69,13 @@ test.describe("Studio run plan state", () => {
       now: "2026-09-29T00:01:00.000Z",
     });
     expect(studioExternalReviewStatus(milestone, firstSha)).toBe("accepted");
+    const duplicateReview = recordStudioGitHubReview(milestone, {
+      headSha: firstSha,
+      decision: "accepted",
+      now: "2026-09-29T00:01:30.000Z",
+    });
+    expect(duplicateReview).toBe(milestone);
+    expect(duplicateReview.githubCheckpoints?.[0].reviewHistory).toHaveLength(1);
 
     milestone = recordStudioGitHubCheckpoint(milestone, {
       repository: "owner/repo",
@@ -82,59 +88,199 @@ test.describe("Studio run plan state", () => {
     expect(studioExternalReviewStatus(milestone, firstSha)).toBe("superseded");
     expect(studioExternalReviewStatus(milestone, secondSha)).toBe("awaiting-lucy");
     expect(milestone.githubCheckpoints?.[0].reviewHistory).toHaveLength(1);
+    expect(
+      recordStudioGitHubCheckpoint(milestone, {
+        repository: "owner/repo",
+        branch: "studio/m1",
+        pullRequestUrl: "https://github.com/owner/repo/pull/12",
+        baseSha,
+        headSha: secondSha,
+        pushedAt: "2026-09-29T00:02:00.000Z",
+      }),
+    ).toBe(milestone);
     expect(() =>
       recordStudioGitHubReview(milestone, { headSha: "e".repeat(40), decision: "accepted" }),
     ).toThrow("exactly recorded");
-    expect(() =>
-      recordStudioGitHubMerge(milestone, {
-        headSha: secondSha,
-        mergeCommitSha: mergeSha,
-        mergedAt: "2026-09-29T00:03:00.000Z",
+  });
+
+  test("generic saves reject forged review/merge evidence and immutable-history edits", () => {
+    const [baseMilestone] = run.milestones;
+    const headSha = "b".repeat(40);
+    const milestone = recordStudioGitHubReview(
+      recordStudioGitHubCheckpoint(baseMilestone, {
+        repository: "owner/repo",
+        branch: "studio/m1",
+        pullRequestUrl: "https://github.com/owner/repo/pull/12",
+        baseSha: "a".repeat(40),
+        headSha,
+        pushedAt: "2026-09-29T00:00:00.000Z",
       }),
-    ).not.toThrow();
-    const merged = recordStudioGitHubMerge(milestone, {
-      headSha: secondSha,
-      mergeCommitSha: mergeSha,
-      mergedAt: "2026-09-29T00:03:00.000Z",
-    });
-    expect(studioExternalReviewStatus(merged, secondSha)).toBe("merged");
-    expect(
-      decodeStudioRunsFile({
-        version: 1,
-        runs: [{ ...run, milestones: [merged, run.milestones[1]] }],
-      }).runs[0].milestones[0],
-    ).toEqual(merged);
+      { headSha, decision: "accepted", now: "2026-09-29T00:01:00.000Z" },
+    );
+    const current = { ...run, milestones: [milestone, run.milestones[1]] };
+    const forged = {
+      ...run,
+      milestones: [
+        {
+          ...baseMilestone,
+          checkpointSha: headSha,
+          pullRequestUrl: "https://github.com/owner/repo/pull/12",
+          githubCheckpoints: [
+            {
+              repository: "owner/repo",
+              branch: "studio/m1",
+              pullRequestUrl: "https://github.com/owner/repo/pull/12",
+              baseSha: "a".repeat(40),
+              headSha,
+              pushedAt: "2026-09-29T00:00:00.000Z",
+              reviewHistory: [
+                {
+                  decision: "accepted" as const,
+                  reviewedHeadSha: headSha,
+                  recordedAt: "2026-09-29T00:01:00.000Z",
+                  source: "matthew-confirmed-lucy" as const,
+                },
+              ],
+            },
+          ],
+        },
+        run.milestones[1],
+      ],
+    };
+    expect(() => preserveStudioRunHistory(undefined, forged)).toThrow("authorised confirmation");
     expect(() =>
-      decodeStudioRunsFile({
-        version: 1,
-        runs: [
+      preserveStudioRunHistory(current, {
+        ...current,
+        milestones: [
           {
-            ...run,
-            milestones: [
+            ...baseMilestone,
+            githubCheckpoints: [
               {
-                ...merged,
-                githubCheckpoints: [
+                ...milestone.githubCheckpoints![0]!,
+                reviewHistory: [
                   {
-                    ...merged.githubCheckpoints?.[1],
-                    reviewHistory: [
-                      {
-                        decision: "merged",
-                        reviewedHeadSha: secondSha,
-                        recordedAt: "2026-09-29T00:03:00.000Z",
-                        source: "matthew",
-                        mergeCommitSha: mergeSha,
-                        mergedAt: "2026-09-29T00:03:00.000Z",
-                      },
-                    ],
+                    decision: "merged",
+                    reviewedHeadSha: headSha,
+                    recordedAt: "2026-09-29T00:02:00.000Z",
+                    source: "github-api",
+                    mergeCommitSha: "d".repeat(40),
+                    mergedAt: "2026-09-29T00:02:00.000Z",
                   },
                 ],
               },
-              run.milestones[1],
             ],
           },
+          current.milestones[1],
         ],
       }),
-    ).toThrow("merge evidence");
+    ).toThrow("review history cannot be deleted or rewritten");
+    expect(() =>
+      preserveStudioRunHistory(current, { ...current, milestones: [milestone] }),
+    ).toThrow("cannot be removed");
+    expect(() =>
+      preserveStudioRunHistory(current, {
+        ...current,
+        milestones: [{ ...milestone, dependsOn: ["m2"] }, current.milestones[1]],
+      }),
+    ).toThrow("identities and dependencies are immutable");
+    expect(() =>
+      preserveStudioRunHistory(current, {
+        ...current,
+        milestones: [{ ...milestone, githubCheckpoints: undefined }, current.milestones[1]],
+      }),
+    ).toThrow("cannot be deleted");
+    expect(() =>
+      preserveStudioRunHistory(current, {
+        ...current,
+        milestones: [
+          {
+            ...milestone,
+            githubCheckpoints: milestone.githubCheckpoints?.map((checkpoint) => ({
+              ...checkpoint,
+              baseSha: "f".repeat(40),
+            })),
+          },
+          current.milestones[1],
+        ],
+      }),
+    ).toThrow("identity is immutable");
+    expect(() =>
+      preserveStudioRunHistory(current, {
+        ...current,
+        milestones: [
+          {
+            ...milestone,
+            githubCheckpoints: milestone.githubCheckpoints?.map((checkpoint) => ({
+              ...checkpoint,
+              reviewHistory: checkpoint.reviewHistory.map((review) => ({
+                ...review,
+                decision: "changes-requested" as const,
+              })),
+            })),
+          },
+          current.milestones[1],
+        ],
+      }),
+    ).toThrow("cannot be deleted or rewritten");
+    expect(() =>
+      preserveStudioRunHistory(current, {
+        ...current,
+        milestones: [milestone, { ...current.milestones[1], dependsOn: [] }],
+      }),
+    ).toThrow("identities and dependencies are immutable");
+  });
+
+  test("legacy forged acceptance and merge claims remain readable but untrusted", () => {
+    const headSha = "b".repeat(40);
+    const legacyRun = {
+      ...run,
+      milestones: [
+        {
+          ...run.milestones[0],
+          githubCheckpoints: [
+            {
+              repository: "owner/repo",
+              branch: "studio/m1",
+              pullRequestUrl: "https://github.com/owner/repo/pull/12",
+              baseSha: "a".repeat(40),
+              headSha,
+              pushedAt: "2026-09-29T00:00:00.000Z",
+              reviewHistory: [
+                {
+                  decision: "merged",
+                  reviewedHeadSha: headSha,
+                  recordedAt: "2026-09-29T00:01:00.000Z",
+                  source: "github-api",
+                  mergeCommitSha: "c".repeat(40),
+                  mergedAt: "2026-09-29T00:01:00.000Z",
+                },
+                {
+                  decision: "accepted",
+                  reviewedHeadSha: headSha,
+                  recordedAt: "2026-09-29T00:02:00.000Z",
+                  source: "matthew",
+                },
+              ],
+            },
+          ],
+        },
+        run.milestones[1],
+      ],
+    };
+    const decoded = decodeStudioRunsFile({ version: 1, runs: [legacyRun] }).runs[0];
+    expect(() => preserveStudioRunHistory(undefined, legacyRun)).toThrow("authorised confirmation");
+    const migrated = decoded.milestones[0];
+    expect(migrated.githubCheckpoints?.[0].reviewHistory.map(({ source }) => source)).toEqual([
+      "legacy-unverified",
+      "legacy-unverified",
+    ]);
+    expect(studioExternalReviewStatus(migrated, headSha)).toBe("awaiting-lucy");
+    expect(() =>
+      preserveStudioRunHistory(decoded, {
+        ...decoded,
+        milestones: [{ ...migrated, githubCheckpoints: [] }, decoded.milestones[1]],
+      }),
+    ).toThrow("cannot be deleted");
   });
 
   test("migrates legacy awaiting-review to internal complete without inventing Lucy approval", () => {

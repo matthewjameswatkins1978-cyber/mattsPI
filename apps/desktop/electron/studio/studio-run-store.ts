@@ -132,15 +132,17 @@ function decodeGitHubCheckpoints(value: unknown, at: string): readonly StudioGit
       );
       if (!reviewDecisions.includes(raw.decision as StudioGitHubReview["decision"]))
         throw new Error(`Invalid ${reviewAt}.decision`);
-      if (raw.source !== "matthew" && raw.source !== "github-api")
+      if (
+        !["matthew", "github-api", "matthew-confirmed-lucy", "legacy-unverified"].includes(
+          String(raw.source),
+        )
+      )
         throw new Error(`Invalid ${reviewAt}.source`);
       if (
         raw.decision === "merged" &&
-        (raw.source !== "github-api" || !raw.mergeCommitSha || !raw.mergedAt)
+        (raw.source === "matthew-confirmed-lucy" || !raw.mergeCommitSha || !raw.mergedAt)
       )
         throw new Error(`Invalid ${reviewAt} merge evidence`);
-      if (raw.decision !== "merged" && raw.source !== "matthew")
-        throw new Error(`Invalid ${reviewAt} review source`);
       if (
         typeof raw.reviewedHeadSha !== "string" ||
         raw.reviewedHeadSha.toLowerCase() !== String(entry.headSha).toLowerCase()
@@ -150,7 +152,8 @@ function decodeGitHubCheckpoints(value: unknown, at: string): readonly StudioGit
         decision: raw.decision as StudioGitHubReview["decision"],
         reviewedHeadSha: text(raw.reviewedHeadSha, `${reviewAt}.reviewedHeadSha`),
         recordedAt: text(raw.recordedAt, `${reviewAt}.recordedAt`),
-        source: raw.source,
+        source:
+          raw.source === "matthew-confirmed-lucy" ? "matthew-confirmed-lucy" : "legacy-unverified",
         ...(optionalText(raw.mergeCommitSha, `${reviewAt}.mergeCommitSha`)
           ? { mergeCommitSha: raw.mergeCommitSha as string }
           : {}),
