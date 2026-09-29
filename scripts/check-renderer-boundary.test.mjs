@@ -53,7 +53,7 @@ for (const source of [
   test(`rejects ${source}`, () => {
     const result = fixture(source);
     assert.equal(result.failures.length, 1);
-    assert.match(result.failures[0], /src\/index.ts:1:/);
+    assert.match(result.failures[0], /src[\\/]index.ts:1:/);
   });
 }
 
@@ -74,7 +74,7 @@ test("follows aliased workspace re-exports and .js source resolution", () => {
     "packages/shared/runtime.ts": 'import "node:fs"; export const value = 1;',
   });
   assert.equal(result.checkedFiles, 3);
-  assert.match(result.failures.join("\n"), /packages\/shared\/runtime.ts:1: Forbidden/);
+  assert.match(result.failures.join("\n"), /packages[\\/]shared[\\/]runtime.ts:1: Forbidden/);
 });
 
 test("allows explicit type-only imports, pure helpers, cycles and browser assets", () => {
@@ -105,7 +105,10 @@ test("inline types retain runtime edges under verbatimModuleSyntax", () => {
     }),
   });
   assert.equal(result.checkedFiles, 2);
-  assert.match(result.failures.join("\n"), /packages\/shared\/typed.ts:1: Renderer reaches main/);
+  assert.match(
+    result.failures.join("\n"),
+    /packages[\\/]shared[\\/]typed.ts:1: Renderer reaches main/,
+  );
   assert.match(result.failures[0], /Use a whole-statement import type/);
   const exported = fixture('export { type Contract } from "@main/service";');
   assert.match(exported.failures[0], /Use a whole-statement export type/);
@@ -131,7 +134,7 @@ for (const constructor of [
       },
     );
     assert.equal(transitive.checkedFiles, 2);
-    assert.match(transitive.failures.join("\n"), /packages\/shared\/worker.ts:1: Forbidden/);
+    assert.match(transitive.failures.join("\n"), /packages[\\/]shared[\\/]worker.ts:1: Forbidden/);
 
     const valid = fixture(
       `new ${constructor}(new URL('../../../packages/shared/worker.ts', import.meta.url));`,
@@ -200,7 +203,7 @@ for (const dependency of [
       "apps/desktop/contracts/api.ts": dependency,
     });
     assert.equal(result.failures.length, 1);
-    assert.match(result.failures[0], /contracts\/api.ts:1:/);
+    assert.match(result.failures[0], /contracts[\\/]api.ts:1:/);
   });
 }
 
@@ -225,7 +228,7 @@ for (const source of [
       "packages/extension-ui/src/transport.ts": "export const createChordServerConnection = 1;",
     });
     assert.equal(result.failures.length, 1);
-    assert.match(result.failures[0], /src\/index.ts:1: Forbidden renderer runtime import/);
+    assert.match(result.failures[0], /src[\\/]index.ts:1: Forbidden renderer runtime import/);
   });
 }
 
