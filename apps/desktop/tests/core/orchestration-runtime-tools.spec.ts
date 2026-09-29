@@ -362,7 +362,8 @@ test("create_child_thread returns after a slow worker starts, before its turn co
     await window.getByTestId("sidebar-studio").click();
     await expect(window.getByText("IMPLEMENTER", { exact: false })).toBeVisible();
     await expect(window.getByText("slow-test/slow", { exact: false })).toBeVisible();
-    await expect(window.getByText("worktree", { exact: false })).toBeVisible();
+    const workerList = window.getByRole("list", { name: "Route visibility workers" });
+    await expect(workerList.getByText("· worktree", { exact: true })).toBeVisible();
     await expect(window.getByText(child.branchName!, { exact: true })).toBeVisible();
     await expect(window.getByText(child.worktreePath!, { exact: true })).toBeVisible();
     await window.getByRole("button", { name: "Open worker thread" }).click();
