@@ -11,6 +11,21 @@ import {
 } from "../helpers/electron-app";
 import { sessionFilePathFromCatalog } from "../helpers/session-file";
 
+function assistantRoute(entry: unknown): string | undefined {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
+  const message = (entry as Record<string, unknown>).message;
+  if (typeof message !== "object" || message === null || Array.isArray(message)) return undefined;
+  const record = message as Record<string, unknown>;
+  if (
+    record.role !== "assistant" ||
+    typeof record.provider !== "string" ||
+    typeof record.model !== "string"
+  ) {
+    return undefined;
+  }
+  return `${record.provider}/${record.model}`;
+}
+
 test("installed Pi GUI Try invokes bounded-context on Qwen Token Plan Max", async () => {
   test.skip(
     process.env.PI_APP_RUN_SKILL_LIVE !== "1",
@@ -97,17 +112,10 @@ test("installed Pi GUI Try invokes bounded-context on Qwen Token Plan Max", asyn
     const entries = transcript
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => JSON.parse(line));
+      .map((line) => JSON.parse(line) as unknown);
     const routes = [
       ...new Set(
-        entries
-          .filter((entry) => entry.message?.role === "assistant")
-          .map((entry) =>
-            entry.message?.provider && entry.message.model
-              ? `${entry.message.provider}/${entry.message.model}`
-              : "",
-          )
-          .filter(Boolean),
+        entries.map(assistantRoute).filter((route): route is string => route !== undefined),
       ),
     ];
     expect(routes).toEqual(["qwen-token-plan/qwen3.8-max"]);
