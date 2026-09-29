@@ -6,6 +6,7 @@ import {
   createNamedThread,
   getDesktopState,
   launchDesktop,
+  launchDesktopByExecutable,
   makeGitWorkspace,
   makeUserDataDir,
   seedAgentDir,
@@ -82,8 +83,13 @@ test("Studio GUI refreshes a saved pull request from live GitHub state", async (
   test.setTimeout(180_000);
   const pullRequestUrl = requireConfiguration("PI_APP_STUDIO_GITHUB_PR_URL");
   const expectedHeadSha = requireConfiguration("PI_APP_STUDIO_EXPECTED_HEAD_SHA");
+  const expectedReviewStatus =
+    process.env.PI_APP_STUDIO_EXPECTED_REVIEW_STATUS?.trim() || "awaiting-lucy";
+  const expectedMergeCommitSha = process.env.PI_APP_STUDIO_EXPECTED_MERGE_SHA?.trim();
   expect(expectedHeadSha).toMatch(/^[0-9a-f]{40}$/i);
   expect(pullRequestUrl).toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+\/?$/);
+  expect(["awaiting-lucy", "merged"]).toContain(expectedReviewStatus);
+  if (expectedReviewStatus === "merged") expect(expectedMergeCommitSha).toMatch(/^[0-9a-f]{40}$/i);
 
   let draftRun: StudioRun | undefined;
   const server = await startScriptedOpenAiServer([studioRunActor(() => draftRun)]);
@@ -125,12 +131,16 @@ test("Studio GUI refreshes a saved pull request from live GitHub state", async (
     )}\n`,
   );
 
-  const harness = await launchDesktop(userDataDir, {
+  const launchOptions = {
     agentDir,
     initialWorkspaces: [workspacePath],
     scrubProviderEnv: true,
     testMode: "background",
-  });
+  } as const;
+  const installedExecutable = process.env.PI_APP_STUDIO_TEST_EXECUTABLE?.trim();
+  const harness = installedExecutable
+    ? await launchDesktopByExecutable(installedExecutable, userDataDir, launchOptions)
+    : await launchDesktop(userDataDir, launchOptions);
   try {
     const window = await harness.firstWindow();
     await createNamedThread(window, "GitHub refresh verification");
@@ -161,12 +171,15 @@ test("Studio GUI refreshes a saved pull request from live GitHub state", async (
       )
       .toBe(pullRequestUrl);
 
+    await window.getByRole("button", { name: "Threads" }).click();
     await window.getByTestId("sidebar-studio").click();
+    await expect.poll(async () => (await getDesktopState(window)).activeView).toBe("studio");
+    await expect(window.getByTestId("studio-runs-view")).toBeVisible();
     const reviewCard = window.getByTestId("studio-github-pull-request");
     await expect(reviewCard).toBeVisible();
     await reviewCard.getByRole("button", { name: "Refresh from GitHub" }).click();
     await expect(reviewCard).toContainText(`HEAD ${expectedHeadSha}`, { timeout: 30_000 });
-    await expect(reviewCard).toContainText("awaiting-lucy");
+    await expect(reviewCard).toContainText(expectedReviewStatus);
 
     const refreshed = await getDesktopState(window);
     const milestone = refreshed.studioRuns[0]?.milestones[0];
@@ -175,16 +188,26 @@ test("Studio GUI refreshes a saved pull request from live GitHub state", async (
       pullRequestUrl,
       headSha: expectedHeadSha,
     });
-    expect(checkpoint).not.toHaveProperty("mergeCommitSha");
-    expect(checkpoint?.reviewHistory ?? []).toHaveLength(0);
+    if (expectedReviewStatus === "merged") {
+      expect(checkpoint?.reviewHistory.at(-1)).toMatchObject({
+        decision: "merged",
+        reviewedHeadSha: expectedHeadSha,
+        source: "github-api",
+        mergeCommitSha: expectedMergeCommitSha,
+      });
+      expect(checkpoint?.reviewHistory.at(-1)?.mergedAt).toBeTruthy();
+    } else {
+      expect(checkpoint).not.toHaveProperty("mergeCommitSha");
+      expect(checkpoint?.reviewHistory ?? []).toHaveLength(0);
+    }
     expect(refreshed.studioRuns[0]?.status).toBe("draft");
     console.log(
       JSON.stringify({
         guiRefreshClicked: true,
         pullRequestUrl,
         headSha: checkpoint?.headSha,
-        mergeObserved: false,
-        reviewStatus: "awaiting-lucy",
+        mergeObserved: expectedReviewStatus === "merged",
+        reviewStatus: expectedReviewStatus,
         provider: "local-scripted-fixture",
         githubOperation: "read-only gh api",
       }),
