@@ -148,6 +148,43 @@ test.describe("Studio run plan state", () => {
       ],
     };
     expect(() => preserveStudioRunHistory(undefined, forged)).toThrow("authorised confirmation");
+    const forgedMerge = decodeStudioRunsFile({
+      version: 1,
+      runs: [
+        {
+          ...current,
+          milestones: [
+            {
+              ...baseMilestone,
+              githubCheckpoints: [
+                {
+                  ...milestone.githubCheckpoints![0]!,
+                  reviewHistory: [
+                    ...milestone.githubCheckpoints![0]!.reviewHistory,
+                    {
+                      decision: "merged",
+                      reviewedHeadSha: headSha,
+                      recordedAt: "2026-09-29T00:02:00.000Z",
+                      source: "github-api",
+                      mergeCommitSha: "e".repeat(40),
+                      mergedAt: "2026-09-29T00:02:00.000Z",
+                    },
+                  ],
+                },
+              ],
+            },
+            current.milestones[1],
+          ],
+        },
+      ],
+    }).runs[0]!;
+    expect(forgedMerge.milestones[0]!.githubCheckpoints![0]!.reviewHistory.at(-1)).toMatchObject({
+      decision: "merged",
+      source: "legacy-unverified",
+    });
+    expect(() => preserveStudioRunHistory(current, forgedMerge)).toThrow(
+      "authorised confirmation path",
+    );
     expect(() =>
       preserveStudioRunHistory(current, {
         ...current,
