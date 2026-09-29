@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 import {
   getSelectedTranscript,
   launchDesktop,
+  launchDesktopByExecutable,
   makeUserDataDir,
   makeWorkspace,
   seedAgentDir,
@@ -173,8 +174,13 @@ test("native Pi context compaction preserves a marker across app restart", async
     scrubProviderEnv: true,
     testMode: "background",
   } as const;
+  const testExecutable = process.env.PI_APP_STUDIO_TEST_EXECUTABLE?.trim();
+  const launch = () =>
+    testExecutable
+      ? launchDesktopByExecutable(testExecutable, userDataDir, launchOptions)
+      : launchDesktop(userDataDir, launchOptions);
 
-  let harness = await launchDesktop(userDataDir, launchOptions);
+  let harness = await launch();
   try {
     let window = await harness.firstWindow();
     await selectSession(window, SESSION_TITLE);
@@ -214,7 +220,7 @@ test("native Pi context compaction preserves a marker across app restart", async
     expect(server.requestLog()).toHaveLength(2);
 
     await harness.close();
-    harness = await launchDesktop(userDataDir, launchOptions);
+    harness = await launch();
     window = await harness.firstWindow();
     await selectSession(window, SESSION_TITLE);
     await waitForSelectedSessionReady(window, { sessionId });
