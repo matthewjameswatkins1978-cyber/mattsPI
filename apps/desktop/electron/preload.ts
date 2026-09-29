@@ -29,6 +29,7 @@ import type { ClipboardImageRead } from "../contracts/composer-attachments";
 import type { SaveTaskWorkbenchTemplateInput, TaskWorkbenchTemplate } from "../contracts/workbench";
 import type {
   ConfirmStudioExternalReviewInput,
+  RecordStudioCorrectionInput,
   ReconcileStudioGitHubPullRequestInput,
   StudioRun,
 } from "../contracts/studio-runs";
@@ -248,6 +249,8 @@ contextBridge.exposeInMainWorld("piApp", {
     ipcRenderer.invoke(desktopIpc.setChildSupervisionLoop, input) as Promise<DesktopAppState>,
   saveStudioRun: (run: StudioRun) =>
     ipcRenderer.invoke(desktopIpc.saveStudioRun, run) as Promise<DesktopAppState>,
+  recordStudioCorrection: (input: RecordStudioCorrectionInput) =>
+    ipcRenderer.invoke(desktopIpc.recordStudioCorrection, input) as Promise<DesktopAppState>,
   confirmStudioExternalReview: (input: ConfirmStudioExternalReviewInput) =>
     ipcRenderer.invoke(desktopIpc.confirmStudioExternalReview, input) as Promise<DesktopAppState>,
   reconcileStudioGitHubPullRequest: (input: ReconcileStudioGitHubPullRequestInput) =>

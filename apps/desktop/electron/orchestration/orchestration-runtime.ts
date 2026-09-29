@@ -457,6 +457,7 @@ function createSaveStudioRunTool(
     promptGuidelines: [
       "Call list_studio_runs before saving to obtain the current project's exact workspaceId and repositoryPath. Use a complete StudioRun object: id, workspaceId, repositoryPath, specification (string), mode (observed or autonomous), status (draft/running/paused/stopped/completed/blocked), milestones, createdAt, updatedAt, and integer revision. Each milestone requires id, title, instruction, dependsOn, status, workerThreadIds, worktreeIds, and updatedAt; checkpointSha, pullRequestUrl, and append-only githubCheckpoints are optional. Internal milestone complete means internally accepted only; never infer Lucy acceptance or merge from it.",
       "Preserve specificationRevision and the complete corrections array when updating an existing run. A prepared correction is not applied until its impact and affected dependencies have been reconciled against the repository and active workers.",
+      "Studio correction history is append-only. Mark prepared as sent only after acting on the correction packet. Mark sent as applied only after reconciling the affected milestones; include a concise reconciliationSummary. Existing milestone IDs, instructions and dependencies are immutable: progress affected work through the normal lifecycle and append replacement milestones with new IDs when the plan changes.",
       "Save the full original specification and milestone/dependency plan before dispatching child work.",
       "Keep at most two Studio child workers active at once. Worker role and provider/model are separate choices: use catalog-confirmed free or subscription routes, pass provider and model_id together only when explicitly routing, and never silently switch to a metered route after an error or quota limit.",
       "Treat a worker's completion message as a claim, not acceptance. Move that milestone to verifying, then create a separate child thread with role independent-inspector to inspect the actual repository diff and run the specification-relevant checks. Read the inspector thread's result and evidence before deciding the milestone outcome; never use the implementation worker's own review as independent verification.",
@@ -495,6 +496,7 @@ function createSaveStudioRunTool(
                   instruction: { type: "string" },
                   affectedMilestoneIds: { type: "array", items: { type: "string" } },
                   status: { type: "string", enum: ["prepared", "sent", "applied", "superseded"] },
+                  reconciliationSummary: { type: "string" },
                   recordedAt: { type: "string" },
                 },
                 required: [

@@ -39,6 +39,7 @@ import {
 } from "../../contracts/workbench";
 import type {
   ConfirmStudioExternalReviewInput,
+  RecordStudioCorrectionInput,
   ReconcileStudioGitHubPullRequestInput,
 } from "../../contracts/studio-runs";
 
@@ -97,6 +98,30 @@ export function expectConfirmStudioExternalReviewInput(
     milestoneId: expectNonEmptyString(input.milestoneId, "milestoneId"),
     reviewedHeadSha: expectNonEmptyString(input.reviewedHeadSha, "reviewedHeadSha"),
     decision: input.decision,
+  };
+}
+
+export function expectRecordStudioCorrectionInput(value: unknown): RecordStudioCorrectionInput {
+  const input = expectRecord(value, "Studio correction");
+  if (
+    Object.keys(input).some(
+      (key) => !["runId", "id", "instruction", "affectedMilestoneIds"].includes(key),
+    )
+  ) {
+    throw new TypeError("Studio correction contains unsupported fields.");
+  }
+  return {
+    runId: expectNonEmptyString(input.runId, "runId"),
+    id: expectNonEmptyString(input.id, "id"),
+    instruction: expectNonEmptyString(input.instruction, "instruction"),
+    ...(input.affectedMilestoneIds === undefined
+      ? {}
+      : {
+          affectedMilestoneIds: expectStringArray(
+            input.affectedMilestoneIds,
+            "affectedMilestoneIds",
+          ),
+        }),
   };
 }
 

@@ -1,10 +1,6 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import type { StudioRun } from "../../../contracts/studio-runs";
-import {
-  recordStudioCorrection,
-  studioExternalReviewStatus,
-  transitionStudioRun,
-} from "../../../contracts/studio-runs";
+import { studioExternalReviewStatus, transitionStudioRun } from "../../../contracts/studio-runs";
 import type {
   DesktopAppState,
   OrchestrationChildThread,
@@ -198,21 +194,36 @@ export function StudioRunsView({
       workspaceId: run.workspaceId,
       sessionId: run.coordinatorSessionId,
     };
-    const correctedRun = recordStudioCorrection(run, {
-      id: `correction-${crypto.randomUUID()}`,
+    const correctionId = `correction-${crypto.randomUUID()}`;
+    const correction = {
+      id: correctionId,
       instruction: correctionText,
-    });
-    const correction = correctedRun.corrections?.at(-1);
-    if (!correction) return;
+      specificationRevision: (run.specificationRevision ?? 1) + 1,
+    };
     const packet = [
       `/studio [LIVE CORRECTION for run ${run.id}; specification revision ${correction.specificationRevision}]`,
       correction.instruction,
-      "Reconcile the existing plan and repository first. Identify affected and unaffected milestones, pause or redirect only affected work, preserve independent work, update the same durable run and dependency graph, then continue within its existing limits. Do not create a duplicate run.",
+      `Affected milestone records: ${
+        run.milestones
+          .filter(({ status }) => status !== "complete" && status !== "cancelled")
+          .map(({ id }) => id)
+          .join(", ") || "none"
+      }`,
+      "Reconcile the repository and affected work first. Preserve completed and independent work. Keep existing milestone records immutable; progress affected old milestones through their valid lifecycle and append replacement milestones with new IDs and the corrected dependency graph. Mark this correction sent after acting on it, then applied only after reconciliation is complete with a concise reconciliationSummary. Do not create a duplicate run.",
     ].join("\n\n");
     setBusyRunId(run.id);
     setError(undefined);
     try {
-      await updateSnapshot(setSnapshot, () => api.saveStudioRun(correctedRun));
+      await updateSnapshot(setSnapshot, () =>
+        api.recordStudioCorrection({
+          runId: run.id,
+          id: correction.id,
+          instruction: correction.instruction,
+          affectedMilestoneIds: run.milestones
+            .filter(({ status }) => status !== "complete" && status !== "cancelled")
+            .map(({ id }) => id),
+        }),
+      );
       await updateSnapshot(setSnapshot, () => api.updateComposerDraft(packet, coordinatorTarget));
       await updateSnapshot(setSnapshot, () => api.selectSession(coordinatorTarget));
       await updateSnapshot(setSnapshot, () => api.setActiveView("threads"));
@@ -383,6 +394,9 @@ export function StudioRunsView({
                     <li key={correction.id}>
                       Revision {correction.specificationRevision} · {correction.status}:{" "}
                       {correction.instruction}
+                      {correction.reconciliationSummary
+                        ? ` — Reconciled: ${correction.reconciliationSummary}`
+                        : ""}
                     </li>
                   ))}
                 </ol>

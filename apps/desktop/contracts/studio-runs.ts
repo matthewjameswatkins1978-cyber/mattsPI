@@ -18,6 +18,13 @@ export interface ConfirmStudioExternalReviewInput {
   readonly decision: "changes-requested" | "accepted";
 }
 
+export interface RecordStudioCorrectionInput {
+  readonly runId: string;
+  readonly id: string;
+  readonly instruction: string;
+  readonly affectedMilestoneIds?: readonly string[];
+}
+
 export interface StudioGitHubReview {
   readonly decision: StudioExternalReviewDecision;
   readonly reviewedHeadSha: string;
@@ -315,6 +322,7 @@ export interface StudioCorrection {
   readonly instruction: string;
   readonly affectedMilestoneIds: readonly string[];
   readonly status: "prepared" | "sent" | "applied" | "superseded";
+  readonly reconciliationSummary?: string;
   readonly recordedAt: string;
 }
 
@@ -341,9 +349,12 @@ export interface StudioRun {
 export function preserveStudioRunHistory(
   current: StudioRun | undefined,
   next: StudioRun,
-  authority: "none" | "lucy-confirmation" | "github-observer" = "none",
+  authority: "none" | "matthew-correction" | "lucy-confirmation" | "github-observer" = "none",
 ): StudioRun {
   if (!current) {
+    if ((next.corrections?.length ?? 0) > 0) {
+      throw new Error("Studio corrections require Matthew's authorised UI path.");
+    }
     if (
       next.milestones.some(({ githubCheckpoints }) =>
         (githubCheckpoints ?? []).some(({ reviewHistory }) => reviewHistory.length > 0),
@@ -355,6 +366,75 @@ export function preserveStudioRunHistory(
   }
   if (next.milestones.length < current.milestones.length) {
     throw new Error("Existing Studio milestones cannot be removed.");
+  }
+  const previousCorrections = current.corrections ?? [];
+  const nextCorrections = next.corrections ?? [];
+  if (nextCorrections.length < previousCorrections.length) {
+    throw new Error("Existing Studio correction history cannot be deleted.");
+  }
+  if (nextCorrections.length > previousCorrections.length + 1) {
+    throw new Error("Studio corrections must be appended one at a time.");
+  }
+  let correctionTransitions = 0;
+  for (let index = 0; index < previousCorrections.length; index += 1) {
+    const previous = previousCorrections[index]!;
+    const correction = nextCorrections[index];
+    if (
+      !correction ||
+      correction.id !== previous.id ||
+      correction.specificationRevision !== previous.specificationRevision ||
+      correction.instruction !== previous.instruction ||
+      JSON.stringify(correction.affectedMilestoneIds) !==
+        JSON.stringify(previous.affectedMilestoneIds) ||
+      correction.recordedAt !== previous.recordedAt ||
+      (previous.reconciliationSummary !== undefined &&
+        correction.reconciliationSummary !== previous.reconciliationSummary)
+    ) {
+      throw new Error("Existing Studio correction history is immutable.");
+    }
+    if (correction.status !== previous.status) {
+      const allowed: Readonly<
+        Record<StudioCorrection["status"], readonly StudioCorrection["status"][]>
+      > = {
+        prepared: ["sent", "superseded"],
+        sent: ["applied", "superseded"],
+        applied: [],
+        superseded: [],
+      };
+      if (!allowed[previous.status].includes(correction.status)) {
+        throw new Error("Studio correction status must follow its lifecycle.");
+      }
+      if (correction.status === "applied" && !correction.reconciliationSummary?.trim()) {
+        throw new Error("Applied Studio corrections require a reconciliation summary.");
+      }
+      if (correction.status !== "applied" && correction.reconciliationSummary !== undefined) {
+        throw new Error("Studio correction summaries are recorded only when applied.");
+      }
+      correctionTransitions += 1;
+    }
+  }
+  if (correctionTransitions > 1) {
+    throw new Error("Update one Studio correction transition at a time.");
+  }
+  const nextMilestonesById = new Map(next.milestones.map((milestone) => [milestone.id, milestone]));
+  for (let index = 0; index < previousCorrections.length; index += 1) {
+    const previous = previousCorrections[index]!;
+    const correction = nextCorrections[index]!;
+    if (
+      previous.status === "sent" &&
+      correction.status === "applied" &&
+      correction.affectedMilestoneIds.some((id) => {
+        const milestone = nextMilestonesById.get(id);
+        return !milestone || (milestone.status !== "complete" && milestone.status !== "cancelled");
+      })
+    ) {
+      throw new Error(
+        "Affected Studio milestones must be completed or cancelled before applying the correction.",
+      );
+    }
+  }
+  if (nextCorrections.length > previousCorrections.length && authority !== "matthew-correction") {
+    throw new Error("Studio corrections require Matthew's authorised UI path.");
   }
   const milestones = next.milestones.map((milestone, index) => {
     const previous = current.milestones[index];
