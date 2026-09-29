@@ -137,6 +137,10 @@ test("Studio Start submits to the prepared thread and records running only after
     await selectSession(window, "Different selected thread");
     await window.getByTestId("sidebar-studio").click();
     await window.getByLabel("Live correction").fill("Include a short operations note.");
+    const correctionInputRun = (await getDesktopState(window)).studioRuns[0]!;
+    const expectedAffectedMilestoneIds = correctionInputRun.milestones
+      .filter(({ status }) => status !== "complete" && status !== "cancelled")
+      .map(({ id }) => id);
     await window.getByRole("button", { name: "Prepare correction in coordinator" }).click();
     await expect(window.locator(".chat-header__title")).toHaveText("Prepared coordinator");
     await expect(window.getByRole("textbox", { name: "Composer" })).toHaveValue(
@@ -149,6 +153,7 @@ test("Studio Start submits to the prepared thread and records running only after
         {
           specificationRevision: 2,
           instruction: "Include a short operations note.",
+          affectedMilestoneIds: expectedAffectedMilestoneIds,
           status: "prepared",
         },
       ],
