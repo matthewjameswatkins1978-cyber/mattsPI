@@ -7,16 +7,19 @@ import {
 } from "../../../contracts/studio-runs";
 import type {
   DesktopAppState,
+  OrchestrationChildThread,
   WorkspaceRecord,
   WorkspaceSessionTarget,
 } from "../../../contracts/desktop-state";
 import type { PiDesktopApi } from "../../../contracts/ipc";
+import { studioRunWorkerRows } from "./studio-run-workers";
 
 interface StudioRunsViewProps {
   readonly workspaces: readonly WorkspaceRecord[];
   readonly selectedWorkspaceId: string;
   readonly selectedThreadTarget?: WorkspaceSessionTarget;
   readonly runs: readonly StudioRun[];
+  readonly orchestrationChildren: readonly OrchestrationChildThread[];
   readonly api: PiDesktopApi;
   readonly setSnapshot: Dispatch<SetStateAction<DesktopAppState | null>>;
   readonly updateSnapshot: (
@@ -64,6 +67,7 @@ export function StudioRunsView({
   selectedWorkspaceId,
   selectedThreadTarget,
   runs,
+  orchestrationChildren,
   api,
   setSnapshot,
   updateSnapshot,
@@ -390,9 +394,68 @@ export function StudioRunsView({
                   const reviewStatus = checkpoint
                     ? studioExternalReviewStatus(milestone, checkpoint.headSha)
                     : undefined;
+                  const workers = studioRunWorkerRows(run, milestone, orchestrationChildren);
                   return (
                     <li key={milestone.id}>
                       {milestone.title} <span>· {milestone.status}</span>
+                      {workers.length > 0 ? (
+                        <ul
+                          className="studio-run__workers"
+                          aria-label={`${milestone.title} workers`}
+                        >
+                          {workers.map(({ workerId, child }) => (
+                            <li className="studio-run__worker" key={workerId}>
+                              {child ? (
+                                <>
+                                  <strong>{child.role ?? "Role not recorded"}</strong>
+                                  <span>
+                                    {child.model
+                                      ? `${child.model.provider}/${child.model.modelId}`
+                                      : "Model route not reported"}
+                                  </span>
+                                  <span>· {child.status}</span>
+                                  <span>
+                                    ·{" "}
+                                    {child.environment === "worktree"
+                                      ? "worktree"
+                                      : "shared workspace"}
+                                  </span>
+                                  {child.branchName ? <code>{child.branchName}</code> : null}
+                                  {child.worktreePath ? <code>{child.worktreePath}</code> : null}
+                                  <button
+                                    className="button studio-run__worker-open"
+                                    onClick={() => {
+                                      void updateSnapshot(setSnapshot, () =>
+                                        api.selectSession({
+                                          workspaceId: child.childWorkspaceId,
+                                          sessionId: child.childSessionId,
+                                        }),
+                                      )
+                                        .then(() =>
+                                          updateSnapshot(setSnapshot, () =>
+                                            api.setActiveView("threads"),
+                                          ),
+                                        )
+                                        .catch((cause: unknown) => {
+                                          setError(
+                                            cause instanceof Error
+                                              ? cause.message
+                                              : "Studio could not open that worker thread.",
+                                          );
+                                        });
+                                    }}
+                                    type="button"
+                                  >
+                                    Open worker thread
+                                  </button>
+                                </>
+                              ) : (
+                                <span>Worker details not loaded · {workerId}</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                       {pullRequestUrl ? (
                         <div
                           className="studio-run__review"

@@ -251,6 +251,40 @@ test("create_child_thread returns after a slow worker starts, before its turn co
     const window = await harness.firstWindow();
     await createNamedThread(window, "Parent orchestration thread");
     const parentRef = await selectedSessionRef(window);
+    const initialState = await getDesktopState(window);
+    const parentWorkspace = initialState.workspaces.find(({ id }) => id === parentRef.workspaceId);
+    if (!parentWorkspace) throw new Error("Expected the parent project workspace");
+    const now = new Date().toISOString();
+    const studioRun: StudioRun = {
+      id: "studio-worker-route-proof",
+      workspaceId: parentWorkspace.id,
+      repositoryPath: parentWorkspace.path,
+      coordinatorSessionId: parentRef.sessionId,
+      specification: "Show the actual route and worktree used by its worker.",
+      mode: "observed",
+      status: "running",
+      milestones: [
+        {
+          id: "worker-route-milestone",
+          title: "Route visibility",
+          instruction: "Use one role-selected child worker.",
+          dependsOn: [],
+          status: "running",
+          workerThreadIds: [],
+          worktreeIds: [],
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+      revision: 1,
+    };
+    await runOrchestrationRuntimeTool(harness, {
+      toolName: "save_studio_run",
+      toolCallId: "save-studio-worker-route-proof",
+      sessionRef: parentRef,
+      params: { run: studioRun },
+    });
     const prompt = "Keep this delegated worker running slowly.";
     await expect(
       runOrchestrationRuntimeTool(harness, {
@@ -304,6 +338,38 @@ test("create_child_thread returns after a slow worker starts, before its turn co
       branchName: expect.stringMatching(/^pi\//),
     });
     expect(child?.childWorkspaceId).not.toBe(parentRef.workspaceId);
+
+    const savedRun = (await getDesktopState(window)).studioRuns.find(
+      ({ id }) => id === studioRun.id,
+    );
+    if (!savedRun || !child) throw new Error("Expected the Studio run and worker record");
+    await runOrchestrationRuntimeTool(harness, {
+      toolName: "save_studio_run",
+      toolCallId: "link-studio-worker-route-proof",
+      sessionRef: parentRef,
+      params: {
+        run: {
+          ...savedRun,
+          revision: savedRun.revision + 1,
+          updatedAt: new Date().toISOString(),
+          milestones: savedRun.milestones.map((milestone) => ({
+            ...milestone,
+            workerThreadIds: [child.id],
+          })),
+        },
+      },
+    });
+    await window.getByTestId("sidebar-studio").click();
+    await expect(window.getByText("IMPLEMENTER", { exact: false })).toBeVisible();
+    await expect(window.getByText("slow-test/slow", { exact: false })).toBeVisible();
+    await expect(window.getByText("worktree", { exact: false })).toBeVisible();
+    await expect(window.getByText(child.branchName!, { exact: true })).toBeVisible();
+    await expect(window.getByText(child.worktreePath!, { exact: true })).toBeVisible();
+    await window.getByRole("button", { name: "Open worker thread" }).click();
+    await expect
+      .poll(async () => (await getDesktopState(window)).selectedSessionId)
+      .toBe(child.childSessionId);
+
     const replay = await runOrchestrationRuntimeTool(harness, {
       toolName: "create_child_thread",
       toolCallId: "create-child-start-ack",

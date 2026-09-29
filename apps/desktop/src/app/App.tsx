@@ -1053,6 +1053,7 @@ export default function App() {
                   : undefined
               }
               runs={snapshot.studioRuns}
+              orchestrationChildren={snapshot.orchestrationChildren}
               api={api}
               setSnapshot={setSnapshot}
               updateSnapshot={updateSnapshot}
