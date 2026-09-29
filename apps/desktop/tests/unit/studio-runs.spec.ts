@@ -148,6 +148,43 @@ test.describe("Studio run plan state", () => {
       ],
     };
     expect(() => preserveStudioRunHistory(undefined, forged)).toThrow("authorised confirmation");
+    for (const source of ["matthew", "github-api"] as const) {
+      const claimedAcceptance = decodeStudioRunsFile({
+        version: 1,
+        runs: [
+          {
+            ...run,
+            milestones: [
+              {
+                ...baseMilestone,
+                githubCheckpoints: [
+                  {
+                    repository: "owner/repo",
+                    branch: "studio/m1",
+                    pullRequestUrl: "https://github.com/owner/repo/pull/12",
+                    baseSha: "a".repeat(40),
+                    headSha,
+                    pushedAt: "2026-09-29T00:00:00.000Z",
+                    reviewHistory: [
+                      {
+                        decision: "accepted",
+                        reviewedHeadSha: headSha,
+                        recordedAt: "2026-09-29T00:01:00.000Z",
+                        source,
+                      },
+                    ],
+                  },
+                ],
+              },
+              run.milestones[1],
+            ],
+          },
+        ],
+      }).runs[0]!;
+      expect(() => preserveStudioRunHistory(undefined, claimedAcceptance)).toThrow(
+        "authorised confirmation",
+      );
+    }
     const forgedMerge = decodeStudioRunsFile({
       version: 1,
       runs: [
@@ -265,6 +302,36 @@ test.describe("Studio run plan state", () => {
         milestones: [milestone, { ...current.milestones[1], dependsOn: [] }],
       }),
     ).toThrow("identities and dependencies are immutable");
+    const legacyIdentityRun = {
+      ...current,
+      milestones: [
+        {
+          ...current.milestones[0]!,
+          githubCheckpoints: undefined,
+          checkpointSha: headSha,
+          pullRequestUrl: "https://github.com/owner/repo/pull/12",
+        },
+        current.milestones[1]!,
+      ],
+    };
+    expect(() =>
+      preserveStudioRunHistory(legacyIdentityRun, {
+        ...legacyIdentityRun,
+        milestones: [
+          { ...legacyIdentityRun.milestones[0]!, checkpointSha: undefined },
+          legacyIdentityRun.milestones[1]!,
+        ],
+      }),
+    ).toThrow("checkpoint identity is immutable");
+    expect(() =>
+      preserveStudioRunHistory(legacyIdentityRun, {
+        ...legacyIdentityRun,
+        milestones: [
+          { ...legacyIdentityRun.milestones[0]!, pullRequestUrl: undefined },
+          legacyIdentityRun.milestones[1]!,
+        ],
+      }),
+    ).toThrow("checkpoint identity is immutable");
   });
 
   test("legacy forged acceptance and merge claims remain readable but untrusted", () => {

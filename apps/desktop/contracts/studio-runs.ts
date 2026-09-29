@@ -281,16 +281,12 @@ export function preserveStudioRunHistory(
         throw new Error("GitHub review evidence requires its authorised confirmation path.");
       }
     }
-    if (
-      milestone.checkpointSha !== undefined &&
-      milestone.checkpointSha !== previous.checkpointSha
-    ) {
+    // These two fields are the only checkpoint identity carried by older ledgers.
+    // Treat omission as a rewrite too; otherwise a model save can erase legacy history.
+    if (milestone.checkpointSha !== previous.checkpointSha) {
       throw new Error("Existing GitHub checkpoint identity is immutable.");
     }
-    if (
-      milestone.pullRequestUrl !== undefined &&
-      milestone.pullRequestUrl !== previous.pullRequestUrl
-    ) {
+    if (milestone.pullRequestUrl !== previous.pullRequestUrl) {
       throw new Error("Existing GitHub checkpoint identity is immutable.");
     }
     return {
