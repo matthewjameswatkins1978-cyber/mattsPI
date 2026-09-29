@@ -225,9 +225,7 @@ test("Studio plan tools persist a project run and restore it after app restart",
     expect(listed.details).toMatchObject({
       project: { workspaceId: restartedRef.workspaceId, repositoryPath: workspace.path },
     });
-    expect(listed.details?.runs).toContainEqual(
-      expect.objectContaining(expectedRun),
-    );
+    expect(listed.details?.runs).toContainEqual(expect.objectContaining(expectedRun));
     expect(JSON.parse(await readFile(join(userDataDir, "studio-runs.json"), "utf8"))).toMatchObject(
       {
         version: 1,

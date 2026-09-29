@@ -1260,8 +1260,7 @@ export class DesktopAppStore {
         ...milestone,
         // Delivery policy is host-owned. Preserve existing policy and make new
         // milestones wait for observed GitHub merge evidence before dependants run.
-        deliveryRequirement:
-          previous?.deliveryRequirement ?? milestone.deliveryRequirement ?? "github-pr",
+        deliveryRequirement: previous?.deliveryRequirement ?? "github-pr",
       };
     });
     return this.persistStudioRun({ ...inputRun, milestones }, "none");

@@ -136,9 +136,7 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
       ? { pullRequestUrl: value.pullRequestUrl as string }
       : {}),
     ...(githubCheckpoints ? { githubCheckpoints } : {}),
-    ...(resolvedDeliveryRequirement
-      ? { deliveryRequirement: resolvedDeliveryRequirement }
-      : {}),
+    ...(resolvedDeliveryRequirement ? { deliveryRequirement: resolvedDeliveryRequirement } : {}),
     updatedAt: text(value.updatedAt, `${at}.updatedAt`),
   };
 }
