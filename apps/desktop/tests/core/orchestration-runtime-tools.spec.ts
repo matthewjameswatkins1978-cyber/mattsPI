@@ -143,7 +143,6 @@ test("Studio plan tools persist a project run and restore it after app restart",
           status: "queued",
           workerThreadIds: [],
           worktreeIds: [],
-          deliveryRequirement: "github-pr",
           updatedAt: now,
         },
       ],
@@ -158,9 +157,39 @@ test("Studio plan tools persist a project run and restore it after app restart",
       params: { run },
     });
     expect(saved.details).toMatchObject({ action: "pi_gui_save_studio_run", runId: run.id });
+    const expectedRun = {
+      ...run,
+      milestones: run.milestones.map((milestone) => ({
+        ...milestone,
+        deliveryRequirement: "github-pr" as const,
+      })),
+      specificationRevision: 1,
+      corrections: [],
+    };
     expect((await getDesktopState(window)).studioRuns).toContainEqual(
-      expect.objectContaining({ ...run, specificationRevision: 1, corrections: [] }),
+      expect.objectContaining(expectedRun),
     );
+    expect((await getDesktopState(window)).studioRuns[0]?.milestones[0]?.deliveryRequirement).toBe(
+      "github-pr",
+    );
+    const modelClaimedLocal = {
+      ...run,
+      id: "studio-local-policy-attempt",
+      milestones: run.milestones.map((milestone) => ({
+        ...milestone,
+        deliveryRequirement: "local" as const,
+      })),
+    };
+    await runOrchestrationRuntimeTool(harness, {
+      toolName: "save_studio_run",
+      toolCallId: "save-studio-local-policy-attempt",
+      sessionRef: parentRef,
+      params: { run: modelClaimedLocal },
+    });
+    expect(
+      (await getDesktopState(window)).studioRuns.find(({ id }) => id === modelClaimedLocal.id)
+        ?.milestones[0]?.deliveryRequirement,
+    ).toBe("github-pr");
     const forgedCorrection = recordStudioCorrection(run, {
       id: "model-forged-correction",
       instruction: "A model must not attribute this to Matthew.",
@@ -185,7 +214,7 @@ test("Studio plan tools persist a project run and restore it after app restart",
     const restartedWindow = await harness.firstWindow();
     const restartedRef = await selectedSessionRef(restartedWindow);
     expect((await getDesktopState(restartedWindow)).studioRuns).toContainEqual(
-      expect.objectContaining({ ...run, specificationRevision: 1, corrections: [] }),
+      expect.objectContaining(expectedRun),
     );
     const listed = await runOrchestrationRuntimeTool(harness, {
       toolName: "list_studio_runs",
@@ -197,12 +226,15 @@ test("Studio plan tools persist a project run and restore it after app restart",
       project: { workspaceId: restartedRef.workspaceId, repositoryPath: workspace.path },
     });
     expect(listed.details?.runs).toContainEqual(
-      expect.objectContaining({ ...run, specificationRevision: 1, corrections: [] }),
+      expect.objectContaining(expectedRun),
     );
     expect(JSON.parse(await readFile(join(userDataDir, "studio-runs.json"), "utf8"))).toMatchObject(
       {
         version: 1,
-        runs: [expect.objectContaining({ id: run.id, revision: 1 })],
+        runs: [
+          expect.objectContaining({ id: run.id, revision: 1 }),
+          expect.objectContaining({ id: modelClaimedLocal.id, revision: 1 }),
+        ],
       },
     );
   } finally {
@@ -286,7 +318,6 @@ test("create_child_thread returns after a slow worker starts, before its turn co
           status: "running",
           workerThreadIds: [],
           worktreeIds: [],
-          deliveryRequirement: "github-pr",
           updatedAt: now,
         },
       ],

@@ -1252,7 +1252,19 @@ export class DesktopAppStore {
   }
 
   async saveStudioRun(inputRun: StudioRun): Promise<DesktopAppState> {
-    return this.persistStudioRun(inputRun, "none");
+    await this.initialize();
+    const current = this.state.studioRuns.find(({ id }) => id === inputRun.id);
+    const milestones = inputRun.milestones.map((milestone) => {
+      const previous = current?.milestones.find(({ id }) => id === milestone.id);
+      return {
+        ...milestone,
+        // Delivery policy is host-owned. Preserve existing policy and make new
+        // milestones wait for observed GitHub merge evidence before dependants run.
+        deliveryRequirement:
+          previous?.deliveryRequirement ?? milestone.deliveryRequirement ?? "github-pr",
+      };
+    });
+    return this.persistStudioRun({ ...inputRun, milestones }, "none");
   }
 
   async recordStudioCorrection(input: RecordStudioCorrectionInput): Promise<DesktopAppState> {

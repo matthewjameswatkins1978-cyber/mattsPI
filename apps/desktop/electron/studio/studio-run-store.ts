@@ -107,8 +107,8 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
   // Explicit legacy-handling rule:
   // Existing saved runs created before deliveryRequirement was recorded may omit it.
   // Legacy milestones carrying PR URLs, checkpoints, or legacy awaiting-review status
-  // are migrated to "github-pr". Other legacy milestones preserve their omitted state,
-  // which the scheduler ensures will not bypass merge verification in the autonomous workflow.
+  // are migrated to "github-pr". Other legacy milestones remain local-only so
+  // previously completed local work can continue to be read and resumed.
   const resolvedDeliveryRequirement =
     value.deliveryRequirement !== undefined
       ? (value.deliveryRequirement as "github-pr" | "local")
@@ -117,7 +117,7 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
           value.status === "awaiting-review" ||
           value.checkpointSha !== undefined
         ? "github-pr"
-        : undefined;
+        : "local";
   return {
     id: text(value.id, `${at}.id`),
     title: text(value.title, `${at}.title`),

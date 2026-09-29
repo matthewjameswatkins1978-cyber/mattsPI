@@ -582,8 +582,38 @@ test.describe("Studio run plan state", () => {
     };
     const decoded = decodeStudioRunsFile({ version: 1, runs: [legacy] }).runs[0]!;
     expect(decoded.milestones[0]!.id).toBe("m1");
-    // Legacy milestone without PR metadata retains undefined, which the scheduler blocks from bypassing merge
-    expect(isStudioMilestoneDependencySatisfied(decoded.milestones[0]!)).toBe(false);
+    // Legacy milestone without PR metadata resolves to "local", allowing completed work to be resumed
+    expect(decoded.milestones[0]!.deliveryRequirement).toBe("local");
+    expect(isStudioMilestoneDependencySatisfied(decoded.milestones[0]!)).toBe(true);
+
+    // Legacy milestone with PR metadata migrates to "github-pr" and requires merge evidence
+    const legacyWithPr = {
+      ...run,
+      milestones: [
+        {
+          id: "m1",
+          title: "M1",
+          instruction: "Do M1",
+          dependsOn: [],
+          status: "complete",
+          pullRequestUrl: "https://github.com/org/repo/pull/1",
+          workerThreadIds: [],
+          worktreeIds: [],
+          updatedAt: "2026-09-28T00:00:00.000Z",
+        },
+      ],
+    };
+    const decodedWithPr = decodeStudioRunsFile({ version: 1, runs: [legacyWithPr] }).runs[0]!;
+    expect(decodedWithPr.milestones[0]!.deliveryRequirement).toBe("github-pr");
+    expect(isStudioMilestoneDependencySatisfied(decodedWithPr.milestones[0]!)).toBe(false);
+
+    // A milestone with undefined deliveryRequirement never bypasses merge in autonomous workflow
+    expect(
+      isStudioMilestoneDependencySatisfied({
+        ...legacy.milestones[0],
+        deliveryRequirement: undefined,
+      }),
+    ).toBe(false);
   });
 
   test("rejects conflicting local and GitHub PR states and prevents bypass", () => {
