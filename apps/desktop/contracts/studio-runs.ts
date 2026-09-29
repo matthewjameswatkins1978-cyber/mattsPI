@@ -23,7 +23,9 @@ export interface StudioGitHubReview {
   readonly reviewedHeadSha: string;
   readonly recordedAt: string;
   /** Legacy claims remain readable but are never authoritative. */
-  readonly source: "matthew-confirmed-lucy" | "legacy-unverified";
+  readonly source: "matthew-confirmed-lucy" | "github-api" | "legacy-unverified";
+  /** Present only for an actual GitHub API observation. */
+  readonly observedAt?: string;
   readonly mergeCommitSha?: string;
   readonly mergedAt?: string;
 }
@@ -38,8 +40,25 @@ export interface StudioGitHubCheckpoint {
   readonly reviewHistory: readonly StudioGitHubReview[];
 }
 
+export interface StudioGitHubPullRequestObservation {
+  readonly repository: string;
+  readonly branch: string;
+  readonly pullRequestUrl: string;
+  readonly baseSha: string;
+  readonly headSha: string;
+  readonly observedAt: string;
+  readonly merged: boolean;
+  readonly mergeCommitSha?: string;
+  readonly mergedAt?: string;
+}
+
+export interface ReconcileStudioGitHubPullRequestInput {
+  readonly runId: string;
+  readonly milestoneId: string;
+}
+
 export type StudioExternalReviewStatus =
-  "awaiting-lucy" | "changes-requested" | "accepted" | "superseded";
+  "awaiting-lucy" | "changes-requested" | "accepted" | "merged" | "superseded";
 
 export interface StudioMilestone {
   readonly id: string;
@@ -117,6 +136,15 @@ export function recordStudioGitHubReview(
     .reverse()
     .find(({ source }) => source === "matthew-confirmed-lucy");
   if (latestTrusted?.decision === input.decision) return milestone;
+  if (
+    checkpoint.reviewHistory.some(
+      ({ decision, source }) => decision === "merged" && source === "github-api",
+    )
+  ) {
+    throw new Error(
+      "Lucy review cannot be recorded after GitHub confirms the pull request merged.",
+    );
+  }
   checkpoints[index] = {
     ...checkpoint,
     reviewHistory: [
@@ -136,6 +164,59 @@ export function recordStudioGitHubReview(
   };
 }
 
+/** Records only a merge observation carrying actual GitHub API metadata. */
+export function recordStudioGitHubMerge(
+  milestone: StudioMilestone,
+  input: {
+    readonly headSha: string;
+    readonly mergeCommitSha: string;
+    readonly mergedAt: string;
+    readonly observedAt: string;
+  },
+): StudioMilestone {
+  if (!validSha(input.mergeCommitSha)) {
+    throw new Error("GitHub merge requires a full merge commit SHA.");
+  }
+  const checkpoints = [...(milestone.githubCheckpoints ?? [])];
+  const index = checkpoints.findIndex(
+    ({ headSha }) => headSha.toLowerCase() === input.headSha.toLowerCase(),
+  );
+  if (index < 0) throw new Error("Merge must match an exactly recorded checkpoint SHA.");
+  const checkpoint = checkpoints[index]!;
+  const priorMerge = checkpoint.reviewHistory.find(
+    ({ decision, source }) => decision === "merged" && source === "github-api",
+  );
+  if (priorMerge) {
+    if (
+      priorMerge.mergeCommitSha === input.mergeCommitSha &&
+      priorMerge.mergedAt === input.mergedAt
+    ) {
+      return milestone;
+    }
+    throw new Error("A GitHub checkpoint's merge observation cannot be rewritten.");
+  }
+  checkpoints[index] = {
+    ...checkpoint,
+    reviewHistory: [
+      ...checkpoint.reviewHistory,
+      {
+        decision: "merged",
+        reviewedHeadSha: input.headSha,
+        recordedAt: input.observedAt,
+        observedAt: input.observedAt,
+        source: "github-api",
+        mergeCommitSha: input.mergeCommitSha,
+        mergedAt: input.mergedAt,
+      },
+    ],
+  };
+  return {
+    ...milestone,
+    githubCheckpoints: checkpoints,
+    updatedAt: input.observedAt,
+  };
+}
+
 export function studioExternalReviewStatus(
   milestone: StudioMilestone,
   headSha: string,
@@ -148,17 +229,84 @@ export function studioExternalReviewStatus(
   if (index < 0) throw new Error("Unknown GitHub checkpoint SHA.");
   if (index !== checkpoints.length - 1) return "superseded";
   const checkpoint = checkpoints[index]!;
-  const review = [...checkpoint.reviewHistory].reverse().find(
-    (
-      candidate,
-    ): candidate is StudioGitHubReview & {
-      decision: "changes-requested" | "accepted";
-    } =>
-      candidate.source === "matthew-confirmed-lucy" &&
-      candidate.decision !== "merged" &&
-      candidate.reviewedHeadSha.toLowerCase() === checkpoint.headSha.toLowerCase(),
+  const mergeObservation = checkpoint.reviewHistory.find(
+    ({ decision, source, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) =>
+      decision === "merged" &&
+      source === "github-api" &&
+      reviewedHeadSha.toLowerCase() === checkpoint.headSha.toLowerCase() &&
+      Boolean(observedAt && mergeCommitSha && mergedAt),
   );
+  if (mergeObservation) return "merged";
+  const review = [...checkpoint.reviewHistory]
+    .reverse()
+    .find(
+      ({ reviewedHeadSha }) => reviewedHeadSha.toLowerCase() === checkpoint.headSha.toLowerCase(),
+    );
+  if (review?.source !== "matthew-confirmed-lucy") return "awaiting-lucy";
+  if (review.decision === "merged") return "awaiting-lucy";
   return review?.decision ?? "awaiting-lucy";
+}
+
+/** Applies a trusted, read-only GitHub API observation to the append-only checkpoint history. */
+export function applyStudioGitHubPullRequestObservation(
+  milestone: StudioMilestone,
+  observation: StudioGitHubPullRequestObservation,
+): StudioMilestone {
+  if (!validSha(observation.baseSha) || !validSha(observation.headSha)) {
+    throw new Error("GitHub pull request observation requires full base and HEAD SHAs.");
+  }
+  const existingUrl =
+    milestone.githubCheckpoints?.at(-1)?.pullRequestUrl ?? milestone.pullRequestUrl;
+  if (
+    !existingUrl ||
+    existingUrl.replace(/\/$/, "") !== observation.pullRequestUrl.replace(/\/$/, "")
+  ) {
+    throw new Error("GitHub observation does not match the milestone pull request.");
+  }
+  let updated = milestone;
+  const latest = milestone.githubCheckpoints?.at(-1);
+  if (latest) {
+    if (
+      latest.repository.toLowerCase() !== observation.repository.toLowerCase() ||
+      latest.branch !== observation.branch ||
+      latest.pullRequestUrl.replace(/\/$/, "") !== observation.pullRequestUrl.replace(/\/$/, "")
+    ) {
+      throw new Error("GitHub observation does not match the saved checkpoint identity.");
+    }
+  }
+  if (!latest || latest.headSha.toLowerCase() !== observation.headSha.toLowerCase()) {
+    updated = recordStudioGitHubCheckpoint(milestone, {
+      repository: observation.repository,
+      branch: observation.branch,
+      pullRequestUrl: observation.pullRequestUrl,
+      baseSha: observation.baseSha,
+      headSha: observation.headSha,
+      pushedAt: observation.observedAt,
+      now: observation.observedAt,
+    });
+  }
+  if (observation.merged) {
+    if (!observation.mergeCommitSha || !observation.mergedAt) {
+      throw new Error("Merged GitHub response is missing merge commit evidence.");
+    }
+    const checkpoint = updated.githubCheckpoints?.at(-1);
+    const alreadyRecorded = checkpoint?.reviewHistory.some(
+      ({ decision, source, mergeCommitSha, mergedAt }) =>
+        decision === "merged" &&
+        source === "github-api" &&
+        mergeCommitSha === observation.mergeCommitSha &&
+        mergedAt === observation.mergedAt,
+    );
+    if (!alreadyRecorded) {
+      updated = recordStudioGitHubMerge(updated, {
+        headSha: observation.headSha,
+        mergeCommitSha: observation.mergeCommitSha,
+        mergedAt: observation.mergedAt,
+        observedAt: observation.observedAt,
+      });
+    }
+  }
+  return updated;
 }
 
 export interface StudioCorrection {
@@ -193,7 +341,7 @@ export interface StudioRun {
 export function preserveStudioRunHistory(
   current: StudioRun | undefined,
   next: StudioRun,
-  allowGitHubEvidenceAppend = false,
+  authority: "none" | "lucy-confirmation" | "github-observer" = "none",
 ): StudioRun {
   if (!current) {
     if (
@@ -265,19 +413,41 @@ export function preserveStudioRunHistory(
       const appendedReviews = newReviews.slice(oldReviews.length);
       if (
         appendedReviews.length > 0 &&
-        (!allowGitHubEvidenceAppend ||
+        (authority === "none" ||
           appendedReviews.some(
-            ({ source, decision, reviewedHeadSha }) =>
-              source !== "matthew-confirmed-lucy" ||
-              decision === "merged" ||
-              reviewedHeadSha.toLowerCase() !== oldCheckpoint.headSha.toLowerCase(),
+            ({ source, decision, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) => {
+              if (reviewedHeadSha.toLowerCase() !== oldCheckpoint.headSha.toLowerCase()) {
+                return true;
+              }
+              if (authority === "lucy-confirmation") {
+                return source !== "matthew-confirmed-lucy" || decision === "merged";
+              }
+              return (
+                source !== "github-api" ||
+                decision !== "merged" ||
+                !observedAt ||
+                !validSha(mergeCommitSha ?? "") ||
+                !mergedAt
+              );
+            },
           ))
       ) {
         throw new Error("GitHub review evidence requires its authorised confirmation path.");
       }
     }
     for (const checkpoint of newCheckpoints.slice(oldCheckpoints.length)) {
-      if (checkpoint.reviewHistory.length > 0) {
+      if (
+        checkpoint.reviewHistory.some(
+          ({ source, decision, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) =>
+            authority !== "github-observer" ||
+            source !== "github-api" ||
+            decision !== "merged" ||
+            reviewedHeadSha.toLowerCase() !== checkpoint.headSha.toLowerCase() ||
+            !observedAt ||
+            !validSha(mergeCommitSha ?? "") ||
+            !mergedAt,
+        )
+      ) {
         throw new Error("GitHub review evidence requires its authorised confirmation path.");
       }
     }

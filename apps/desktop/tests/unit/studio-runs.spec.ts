@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   availableStudioMilestones,
+  applyStudioGitHubPullRequestObservation,
   preserveStudioRunHistory,
   recordStudioGitHubCheckpoint,
   recordStudioGitHubReview,
@@ -275,12 +276,67 @@ test.describe("Studio run plan state", () => {
       "legacy-unverified",
     ]);
     expect(studioExternalReviewStatus(migrated, headSha)).toBe("awaiting-lucy");
+    const verifiedAfterLegacyClaim = applyStudioGitHubPullRequestObservation(migrated, {
+      repository: "owner/repo",
+      branch: "studio/m1",
+      pullRequestUrl: "https://github.com/owner/repo/pull/12",
+      baseSha: "a".repeat(40),
+      headSha,
+      observedAt: "2026-09-29T00:03:00.000Z",
+      merged: true,
+      mergeCommitSha: "c".repeat(40),
+      mergedAt: "2026-09-29T00:01:00.000Z",
+    });
+    expect(studioExternalReviewStatus(verifiedAfterLegacyClaim, headSha)).toBe("merged");
     expect(() =>
       preserveStudioRunHistory(decoded, {
         ...decoded,
         milestones: [{ ...migrated, githubCheckpoints: [] }, decoded.milestones[1]],
       }),
     ).toThrow("cannot be deleted");
+  });
+
+  test("records only direct GitHub merge observations and makes refresh idempotent", () => {
+    const headSha = "b".repeat(40);
+    const checkpoint = recordStudioGitHubCheckpoint(run.milestones[0]!, {
+      repository: "owner/repo",
+      branch: "studio/m1",
+      pullRequestUrl: "https://github.com/owner/repo/pull/12",
+      baseSha: "a".repeat(40),
+      headSha,
+      pushedAt: "2026-09-29T00:00:00.000Z",
+    });
+    const observation = {
+      repository: "owner/repo",
+      branch: "studio/m1",
+      pullRequestUrl: "https://github.com/owner/repo/pull/12",
+      baseSha: "a".repeat(40),
+      headSha,
+      observedAt: "2026-09-29T00:02:00.000Z",
+      merged: true,
+      mergeCommitSha: "c".repeat(40),
+      mergedAt: "2026-09-29T00:01:00.000Z",
+    };
+    const merged = applyStudioGitHubPullRequestObservation(checkpoint, observation);
+    expect(studioExternalReviewStatus(merged, headSha)).toBe("merged");
+    expect(merged.githubCheckpoints?.[0]?.reviewHistory.at(-1)).toMatchObject({
+      source: "github-api",
+      decision: "merged",
+      mergeCommitSha: observation.mergeCommitSha,
+      observedAt: observation.observedAt,
+    });
+    const persisted = decodeStudioRunsFile({
+      version: 1,
+      runs: [{ ...run, milestones: [merged, run.milestones[1]] }],
+    }).runs[0]!;
+    expect(studioExternalReviewStatus(persisted.milestones[0]!, headSha)).toBe("merged");
+    expect(() =>
+      preserveStudioRunHistory(
+        { ...run, milestones: [checkpoint, run.milestones[1]] },
+        { ...run, milestones: [merged, run.milestones[1]] },
+      ),
+    ).toThrow("authorised confirmation");
+    expect(applyStudioGitHubPullRequestObservation(merged, observation)).toBe(merged);
   });
 
   test("migrates legacy awaiting-review to internal complete without inventing Lucy approval", () => {

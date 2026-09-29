@@ -128,7 +128,7 @@ export function StudioRunsView({
 
   const changeStatus = (run: StudioRun, status: StudioRun["status"]) => {
     try {
-      void save(transitionStudioRun(run, status));
+      save(transitionStudioRun(run, status)).catch(() => undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "That status change is not allowed.");
     }
@@ -254,6 +254,24 @@ export function StudioRunsView({
     }
   };
 
+  const refreshGitHubPullRequest = async (run: StudioRun, milestoneId: string) => {
+    setBusyRunId(run.id);
+    setError(undefined);
+    try {
+      await updateSnapshot(setSnapshot, () =>
+        api.reconcileStudioGitHubPullRequest({ runId: run.id, milestoneId }),
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Studio could not refresh this pull request from GitHub.",
+      );
+    } finally {
+      setBusyRunId(undefined);
+    }
+  };
+
   return (
     <section className="canvas studio-runs-view" data-testid="studio-runs-view">
       <header className="view-header">
@@ -304,7 +322,9 @@ export function StudioRunsView({
             className="button button--primary"
             type="button"
             disabled={!workspace || !specification.trim() || Boolean(busyRunId)}
-            onClick={() => void createPlan()}
+            onClick={() => {
+              createPlan().catch(() => undefined);
+            }}
           >
             Save draft
           </button>
@@ -319,7 +339,9 @@ export function StudioRunsView({
               mode !== "observed" ||
               Boolean(busyRunId)
             }
-            onClick={() => void prepareInCurrentThread()}
+            onClick={() => {
+              prepareInCurrentThread().catch(() => undefined);
+            }}
           >
             Prepare in current thread
           </button>
@@ -364,53 +386,77 @@ export function StudioRunsView({
               <ol>
                 {run.milestones.map((milestone) => {
                   const checkpoint = milestone.githubCheckpoints?.at(-1);
+                  const pullRequestUrl = checkpoint?.pullRequestUrl ?? milestone.pullRequestUrl;
                   const reviewStatus = checkpoint
                     ? studioExternalReviewStatus(milestone, checkpoint.headSha)
                     : undefined;
                   return (
                     <li key={milestone.id}>
                       {milestone.title} <span>· {milestone.status}</span>
-                      {checkpoint ? (
+                      {pullRequestUrl ? (
                         <div
                           className="studio-run__review"
-                          data-testid="studio-review-confirmation"
+                          data-testid="studio-github-pull-request"
                         >
-                          <p>
-                            GitHub review · {reviewStatus} · HEAD <code>{checkpoint.headSha}</code>
-                          </p>
+                          {checkpoint ? (
+                            <>
+                              <p>
+                                GitHub review · {reviewStatus} · HEAD{" "}
+                                <code>{checkpoint.headSha}</code>
+                              </p>
+                              <button
+                                className="button"
+                                disabled={
+                                  Boolean(busyRunId) ||
+                                  reviewStatus === "accepted" ||
+                                  reviewStatus === "merged"
+                                }
+                                onClick={() => {
+                                  confirmLucyDecision(
+                                    run,
+                                    milestone.id,
+                                    checkpoint.headSha,
+                                    "accepted",
+                                  ).catch(() => undefined);
+                                }}
+                                type="button"
+                              >
+                                Confirm Lucy ACCEPT for this SHA
+                              </button>
+                              <button
+                                className="button"
+                                disabled={
+                                  Boolean(busyRunId) ||
+                                  reviewStatus === "changes-requested" ||
+                                  reviewStatus === "merged"
+                                }
+                                onClick={() => {
+                                  confirmLucyDecision(
+                                    run,
+                                    milestone.id,
+                                    checkpoint.headSha,
+                                    "changes-requested",
+                                  ).catch(() => undefined);
+                                }}
+                                type="button"
+                              >
+                                Record Lucy changes requested
+                              </button>
+                            </>
+                          ) : null}
                           <button
                             className="button"
-                            disabled={Boolean(busyRunId) || reviewStatus === "accepted"}
+                            disabled={Boolean(busyRunId)}
                             onClick={() => {
-                              confirmLucyDecision(
-                                run,
-                                milestone.id,
-                                checkpoint.headSha,
-                                "accepted",
-                              ).catch(() => undefined);
+                              refreshGitHubPullRequest(run, milestone.id).catch(() => undefined);
                             }}
                             type="button"
                           >
-                            Confirm Lucy ACCEPT for this SHA
-                          </button>
-                          <button
-                            className="button"
-                            disabled={Boolean(busyRunId) || reviewStatus === "changes-requested"}
-                            onClick={() => {
-                              confirmLucyDecision(
-                                run,
-                                milestone.id,
-                                checkpoint.headSha,
-                                "changes-requested",
-                              ).catch(() => undefined);
-                            }}
-                            type="button"
-                          >
-                            Record Lucy changes requested
+                            Refresh from GitHub
                           </button>
                           <p className="studio-note">
-                            Confirmation is recorded for this exact SHA. Merge status remains
-                            unavailable until Pi observes GitHub directly.
+                            Lucy confirmation is tied to the exact SHA. Merge status is shown only
+                            after a direct read from GitHub.
                           </p>
                         </div>
                       ) : null}
@@ -435,7 +481,9 @@ export function StudioRunsView({
                     <button
                       className="button"
                       disabled={Boolean(busyRunId) || !correctionText.trim()}
-                      onClick={() => void prepareCorrection(run)}
+                      onClick={() => {
+                        prepareCorrection(run).catch(() => undefined);
+                      }}
                       type="button"
                     >
                       Prepare correction in coordinator
@@ -457,7 +505,9 @@ export function StudioRunsView({
                       selectedThreadTarget?.workspaceId !== run.workspaceId ||
                       selectedThreadTarget.sessionId !== run.coordinatorSessionId
                     }
-                    onClick={() => void startRun(run)}
+                    onClick={() => {
+                      startRun(run).catch(() => undefined);
+                    }}
                     type="button"
                   >
                     {run.status === "paused"
@@ -479,7 +529,9 @@ export function StudioRunsView({
                   <button
                     className="button"
                     disabled={Boolean(busyRunId)}
-                    onClick={() => void stopRun(run)}
+                    onClick={() => {
+                      stopRun(run).catch(() => undefined);
+                    }}
                     type="button"
                   >
                     Stop run and cancel workers

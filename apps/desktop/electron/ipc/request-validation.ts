@@ -37,7 +37,10 @@ import {
   decodeTaskWorkbenchTemplate,
   type SaveTaskWorkbenchTemplateInput,
 } from "../../contracts/workbench";
-import type { ConfirmStudioExternalReviewInput } from "../../contracts/studio-runs";
+import type {
+  ConfirmStudioExternalReviewInput,
+  ReconcileStudioGitHubPullRequestInput,
+} from "../../contracts/studio-runs";
 
 export function expectSaveTaskWorkbenchTemplateInput(
   value: unknown,
@@ -94,6 +97,19 @@ export function expectConfirmStudioExternalReviewInput(
     milestoneId: expectNonEmptyString(input.milestoneId, "milestoneId"),
     reviewedHeadSha: expectNonEmptyString(input.reviewedHeadSha, "reviewedHeadSha"),
     decision: input.decision,
+  };
+}
+
+export function expectReconcileStudioGitHubPullRequestInput(
+  value: unknown,
+): ReconcileStudioGitHubPullRequestInput {
+  const input = expectRecord(value, "Studio GitHub pull request refresh");
+  if (Object.keys(input).some((key) => !["runId", "milestoneId"].includes(key))) {
+    throw new TypeError("Studio GitHub pull request refresh contains unsupported fields.");
+  }
+  return {
+    runId: expectNonEmptyString(input.runId, "runId"),
+    milestoneId: expectNonEmptyString(input.milestoneId, "milestoneId"),
   };
 }
 

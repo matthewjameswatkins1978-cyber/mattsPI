@@ -127,7 +127,15 @@ function decodeGitHubCheckpoints(value: unknown, at: string): readonly StudioGit
       if (!record(raw)) throw new Error(`Invalid ${reviewAt}`);
       keys(
         raw,
-        ["decision", "reviewedHeadSha", "recordedAt", "source", "mergeCommitSha", "mergedAt"],
+        [
+          "decision",
+          "reviewedHeadSha",
+          "recordedAt",
+          "source",
+          "mergeCommitSha",
+          "mergedAt",
+          "observedAt",
+        ],
         reviewAt,
       );
       if (!reviewDecisions.includes(raw.decision as StudioGitHubReview["decision"]))
@@ -148,17 +156,33 @@ function decodeGitHubCheckpoints(value: unknown, at: string): readonly StudioGit
         raw.reviewedHeadSha.toLowerCase() !== String(entry.headSha).toLowerCase()
       )
         throw new Error(`Invalid ${reviewAt}.reviewedHeadSha binding`);
+      const trustedMergeObservation =
+        raw.source === "github-api" &&
+        raw.decision === "merged" &&
+        typeof raw.observedAt === "string" &&
+        Boolean(raw.observedAt.trim()) &&
+        typeof raw.mergeCommitSha === "string" &&
+        /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(raw.mergeCommitSha) &&
+        typeof raw.mergedAt === "string" &&
+        Boolean(raw.mergedAt.trim());
       return {
         decision: raw.decision as StudioGitHubReview["decision"],
         reviewedHeadSha: text(raw.reviewedHeadSha, `${reviewAt}.reviewedHeadSha`),
         recordedAt: text(raw.recordedAt, `${reviewAt}.recordedAt`),
         source:
-          raw.source === "matthew-confirmed-lucy" ? "matthew-confirmed-lucy" : "legacy-unverified",
+          raw.source === "matthew-confirmed-lucy"
+            ? "matthew-confirmed-lucy"
+            : trustedMergeObservation
+              ? "github-api"
+              : "legacy-unverified",
         ...(optionalText(raw.mergeCommitSha, `${reviewAt}.mergeCommitSha`)
           ? { mergeCommitSha: raw.mergeCommitSha as string }
           : {}),
         ...(optionalText(raw.mergedAt, `${reviewAt}.mergedAt`)
           ? { mergedAt: raw.mergedAt as string }
+          : {}),
+        ...(trustedMergeObservation
+          ? { observedAt: text(raw.observedAt, `${reviewAt}.observedAt`) }
           : {}),
       };
     });

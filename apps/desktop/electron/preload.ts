@@ -27,7 +27,11 @@ import {
 } from "../contracts/ipc";
 import type { ClipboardImageRead } from "../contracts/composer-attachments";
 import type { SaveTaskWorkbenchTemplateInput, TaskWorkbenchTemplate } from "../contracts/workbench";
-import type { ConfirmStudioExternalReviewInput, StudioRun } from "../contracts/studio-runs";
+import type {
+  ConfirmStudioExternalReviewInput,
+  ReconcileStudioGitHubPullRequestInput,
+  StudioRun,
+} from "../contracts/studio-runs";
 import type {
   TurnChangesInput,
   TurnChangesResult,
@@ -246,6 +250,11 @@ contextBridge.exposeInMainWorld("piApp", {
     ipcRenderer.invoke(desktopIpc.saveStudioRun, run) as Promise<DesktopAppState>,
   confirmStudioExternalReview: (input: ConfirmStudioExternalReviewInput) =>
     ipcRenderer.invoke(desktopIpc.confirmStudioExternalReview, input) as Promise<DesktopAppState>,
+  reconcileStudioGitHubPullRequest: (input: ReconcileStudioGitHubPullRequestInput) =>
+    ipcRenderer.invoke(
+      desktopIpc.reconcileStudioGitHubPullRequest,
+      input,
+    ) as Promise<DesktopAppState>,
   submitComposerToTarget: (text: string, target: WorkspaceSessionTarget, options) =>
     ipcRenderer.invoke(
       desktopIpc.submitComposerToTarget,
