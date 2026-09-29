@@ -659,8 +659,10 @@ export function transitionStudioRun(
   ) {
     throw new Error("A Studio run cannot complete while milestones remain unfinished.");
   }
+  const { lastError, ...runWithoutLastError } = run;
   return {
-    ...run,
+    ...runWithoutLastError,
+    ...(status === "running" || lastError === undefined ? {} : { lastError }),
     status,
     milestones:
       status === "stopped"
@@ -673,6 +675,31 @@ export function transitionStudioRun(
     updatedAt: now,
     revision: run.revision + 1,
   };
+}
+
+/**
+ * A desktop restart cannot prove that the prior coordinator or its workers are still running.
+ * Pause persisted runs and require an explicit coordinator reconciliation before dispatch resumes.
+ */
+export function recoverStudioRunsAfterRestart(
+  runs: readonly StudioRun[],
+  now = new Date().toISOString(),
+): readonly StudioRun[] {
+  let recoveredAny = false;
+  const recovered = runs.map((run) => {
+    if (run.status !== "running") return run;
+    recoveredAny = true;
+    const paused = transitionStudioRun(run, "paused", now);
+    const recoveryNote =
+      "Restart recovery required: reconcile the current Pi coordinator and worker threads, repository state, verification results, and GitHub checkpoints before dispatching more work. Preserve completed work and do not duplicate milestones already running or complete.";
+    return {
+      ...paused,
+      lastError: run.lastError?.trim()
+        ? `${run.lastError.trim()}\n\n${recoveryNote}`
+        : recoveryNote,
+    };
+  });
+  return recoveredAny ? recovered : runs;
 }
 
 /** Applies one explicit milestone transition; completed dependencies are immutable. */

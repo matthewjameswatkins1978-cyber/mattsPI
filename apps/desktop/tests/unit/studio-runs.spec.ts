@@ -3,6 +3,7 @@ import {
   availableStudioMilestones,
   applyStudioGitHubPullRequestObservation,
   preserveStudioRunHistory,
+  recoverStudioRunsAfterRestart,
   recordStudioGitHubCheckpoint,
   recordStudioGitHubReview,
   recordStudioCorrection,
@@ -373,6 +374,21 @@ test.describe("Studio run plan state", () => {
     const stopped = transitionStudioRun(run, "stopped");
     expect(stopped.milestones.map(({ status }) => status)).toEqual(["cancelled", "cancelled"]);
     expect(() => transitionStudioRun(stopped, "running")).toThrow("terminal");
+  });
+
+  test("restart recovery pauses only running plans and is safe to repeat", () => {
+    const untouched = { ...run, status: "draft" as const };
+    const recovered = recoverStudioRunsAfterRestart([run, untouched], "2026-09-29T01:00:00.000Z");
+    expect(recovered[0]).toMatchObject({
+      status: "paused",
+      revision: run.revision + 1,
+      updatedAt: "2026-09-29T01:00:00.000Z",
+      lastError: expect.stringContaining("Restart recovery required"),
+    });
+    expect(availableStudioMilestones(recovered[0]!)).toEqual([]);
+    expect(recovered[1]).toBe(untouched);
+    expect(recoverStudioRunsAfterRestart(recovered)).toBe(recovered);
+    expect(transitionStudioRun(recovered[0]!, "running")).not.toHaveProperty("lastError");
   });
 
   test("records a durable live correction as a new specification revision", () => {

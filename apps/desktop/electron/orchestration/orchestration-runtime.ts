@@ -574,7 +574,7 @@ function createListStudioRunsTool(
     promptSnippet:
       "list_studio_runs: get exact project workspaceId/repositoryPath and restore durable Studio plan state.",
     promptGuidelines: [
-      "Load saved Studio runs before planning, starting, updating, or resuming project work. The result includes project.workspaceId and project.repositoryPath; copy these exact values into save_studio_run and do not guess them.",
+      "Load saved Studio runs before planning, starting, updating, or resuming project work. The result includes project.workspaceId and project.repositoryPath; copy these exact values into save_studio_run and do not guess them. If a run is paused with a restart recovery note, reconcile the current Pi coordinator/worker threads, repository state, verification results, and GitHub checkpoints before dispatching. Preserve completed and already-running milestones; do not duplicate their work.",
       "Reconcile persisted worker and checkpoint identities against actual threads and Git state before dispatching or replaying work.",
     ],
     parameters: { type: "object", properties: {} },

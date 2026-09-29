@@ -385,6 +385,11 @@ export function StudioRunsView({
                 <span className="studio-run__revision">Revision {run.revision}</span>
               </div>
               <p className="studio-run__specification">{run.specification}</p>
+              {run.lastError ? (
+                <p className="studio-note" data-testid="studio-run-recovery-note" role="status">
+                  {run.lastError}
+                </p>
+              ) : null}
               <p className="studio-run__revision">
                 Specification revision {run.specificationRevision ?? 1}
               </p>

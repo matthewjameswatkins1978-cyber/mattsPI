@@ -75,8 +75,10 @@ import type {
   StudioRun,
 } from "../../contracts/studio-runs";
 import {
+  STUDIO_RUNS_FILE_VERSION,
   applyStudioGitHubPullRequestObservation,
   preserveStudioRunHistory,
+  recoverStudioRunsAfterRestart,
   recordStudioCorrection as appendStudioCorrection,
   recordStudioGitHubReview,
   transitionStudioMilestone,
@@ -2155,8 +2157,24 @@ export class DesktopAppStore {
 
     try {
       const loadedRuns = await readStudioRunsFile(this.studioRunsFilePath);
-      this.state = { ...this.state, studioRuns: [...loadedRuns.runs] };
+      const recoveredRuns = recoverStudioRunsAfterRestart(loadedRuns.runs);
+      this.state = { ...this.state, studioRuns: [...recoveredRuns] };
       this.studioRunsWritable = true;
+      if (recoveredRuns !== loadedRuns.runs) {
+        try {
+          await writeStudioRunsFile(this.studioRunsFilePath, {
+            version: STUDIO_RUNS_FILE_VERSION,
+            runs: recoveredRuns,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.studioRunsWritable = false;
+          startupDiagnostics.push({
+            scope: "application",
+            message: `Studio restart recovery is active in memory but could not be saved: ${message}`,
+          });
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[app-store] studio-runs.json is invalid; Studio persistence disabled", error);
