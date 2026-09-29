@@ -102,6 +102,11 @@ export interface WorkspaceOwner {
   removeWorktree(input: RemoveWorktreeInput): Promise<DesktopAppState>;
   startThread(input: StartThreadInput): Promise<DesktopAppState>;
   forkThread(input: ForkThreadInput): Promise<DesktopAppState>;
+  createChildSession(input: StartThreadInput): Promise<{
+    readonly snapshot: SessionSnapshot;
+    readonly workspacePath: string;
+    readonly branchName?: string;
+  }>;
   reconcileWorktrees(): Promise<void>;
   syncAndListWorktrees(
     workspaces: Parameters<typeof worktree.syncAndListWorktrees>[1],
@@ -124,6 +129,7 @@ export function createWorkspaceOwner(store: WorkspaceOwnerHost): WorkspaceOwner 
     removeWorktree: (input) => worktree.removeWorktree(store, input),
     startThread: (input) => worktree.startThread(store, input),
     forkThread: (input) => worktree.forkThread(store, input),
+    createChildSession: (input) => worktree.createChildSession(store, input),
     reconcileWorktrees: () => worktree.reconcileWorktrees(store),
     syncAndListWorktrees: (workspaces) => worktree.syncAndListWorktrees(store, workspaces),
   };

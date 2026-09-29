@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { cp, mkdtemp, readdir, realpath, rename } from "node:fs/promises";
+import { cp, mkdtemp, readdir, realpath, rename, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -35,6 +35,21 @@ export async function resolvePackagedAppBundle(releaseDir = packagedReleaseDir):
 export async function resolvePackagedAppExecutable(
   releaseDir = packagedReleaseDir,
 ): Promise<string> {
+  if (process.platform === "win32") {
+    for (const executablePath of [
+      join(releaseDir, "win-unpacked", "pi-gui.exe"),
+      join(releaseDir, "pi-gui.exe"),
+    ]) {
+      try {
+        if ((await stat(executablePath)).isFile()) return executablePath;
+      } catch (error) {
+        if (!isMissingPathError(error)) throw error;
+      }
+    }
+    throw new Error(
+      `No Windows packaged executable found under ${releaseDir}. Run pnpm --filter @pi-gui/desktop run package:win:dir first.`,
+    );
+  }
   return resolveAppBundleExecutable(await resolvePackagedAppBundle(releaseDir));
 }
 

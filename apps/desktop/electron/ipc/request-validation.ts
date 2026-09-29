@@ -130,6 +130,7 @@ export function expectAppView(value: unknown, name = "view"): AppView {
     value !== "threads" &&
     value !== "new-thread" &&
     value !== "scheduled" &&
+    value !== "studio" &&
     value !== "skills" &&
     value !== "extensions" &&
     value !== "settings"

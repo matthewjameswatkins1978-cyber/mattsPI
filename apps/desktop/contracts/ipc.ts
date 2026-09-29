@@ -15,6 +15,7 @@ import type {
 import type { ClipboardImageRead } from "./composer-attachments";
 import type { SessionRef } from "@pi-gui/session-driver/types";
 import type { SaveTaskWorkbenchTemplateInput, TaskWorkbenchTemplate } from "./workbench";
+import type { StudioRun } from "./studio-runs";
 import type {
   TurnChangesInput,
   TurnChangesResult,
@@ -113,6 +114,8 @@ export const desktopIpc = {
   forkThread: "pi-gui:fork-thread",
   sendChildThreadFollowUp: "pi-gui:send-child-thread-follow-up",
   setChildSupervisionLoop: "pi-gui:set-child-supervision-loop",
+  saveStudioRun: "pi-gui:save-studio-run",
+  submitComposerToTarget: "pi-gui:submit-composer-to-target",
   createScheduledTask: "pi-gui:create-scheduled-task",
   updateScheduledTask: "pi-gui:update-scheduled-task",
   deleteScheduledTask: "pi-gui:delete-scheduled-task",
@@ -687,6 +690,7 @@ export interface PiDesktopApi {
   forkThread(input: ForkThreadInput): Promise<DesktopAppState>;
   sendChildThreadFollowUp(input: SendChildThreadFollowUpInput): Promise<DesktopAppState>;
   setChildSupervisionLoop(input: SetChildSupervisionLoopInput): Promise<DesktopAppState>;
+  saveStudioRun(run: StudioRun): Promise<DesktopAppState>;
   createScheduledTask(input: CreateScheduledTaskInput): Promise<DesktopAppState>;
   updateScheduledTask(id: string, patch: UpdateScheduledTaskInput): Promise<DesktopAppState>;
   deleteScheduledTask(id: string): Promise<DesktopAppState>;
@@ -803,6 +807,11 @@ export interface PiDesktopApi {
   updateComposerDraft(composerDraft: string, target: SessionRef): Promise<DesktopAppState>;
   submitComposer(
     text: string,
+    options?: { readonly deliverAs?: "steer" | "followUp" },
+  ): Promise<DesktopAppState>;
+  submitComposerToTarget(
+    text: string,
+    target: WorkspaceSessionTarget,
     options?: { readonly deliverAs?: "steer" | "followUp" },
   ): Promise<DesktopAppState>;
   getSessionTree(target: WorkspaceSessionTarget): Promise<SessionTreeSnapshot>;

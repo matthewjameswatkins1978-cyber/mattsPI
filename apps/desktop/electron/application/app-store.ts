@@ -68,6 +68,8 @@ import {
   type ScheduledTaskRecord,
   type UpdateScheduledTaskInput,
 } from "../../contracts/desktop-state";
+import type { StudioRun } from "../../contracts/studio-runs";
+import { transitionStudioMilestone, transitionStudioRun } from "../../contracts/studio-runs";
 import {
   applyTimelineEvent,
   appendAssistantDelta,
@@ -140,6 +142,11 @@ import {
   writeScheduledTasksFile,
 } from "../scheduled-tasks/scheduled-task-store";
 import {
+  decodeStudioRunsFile,
+  readStudioRunsFile,
+  writeStudioRunsFile,
+} from "../studio/studio-run-store";
+import {
   isSessionActivelyViewed,
   isSessionVisibleInWindow,
 } from "../conversation/session-visibility";
@@ -159,6 +166,7 @@ type ExtensionUiDialogRequest = Extract<
 };
 export interface DesktopAppStoreOptions {
   readonly userDataDir: string;
+  readonly worktreeRoot?: string;
   readonly initialWorkspacePaths: readonly string[];
   readonly getWindow?: () => BrowserWindow | null;
   readonly shouldKeepSessionDialogs?: (sessionRef: SessionRef) => boolean;
@@ -225,7 +233,9 @@ export class DesktopAppStore {
   private readonly isAppWorktreePath: (path: string) => Promise<boolean>;
   private readonly uiStateFilePath: string;
   private readonly scheduledTasksFilePath: string;
+  private readonly studioRunsFilePath: string;
   private scheduledTasksWritable = false;
+  private studioRunsWritable = false;
   private readonly attachmentStore: AttachmentStore;
   private readonly sessionState = new SessionStateMap();
   private readonly taskWorkbenchTemplatesBySession = new Map<string, TaskWorkbenchTemplate>();
@@ -275,7 +285,9 @@ export class DesktopAppStore {
     };
 
     this.driver = new PiSdkDriver(driverOptions);
-    this.worktreeRoot = join(options.userDataDir, "worktrees");
+    this.worktreeRoot = resolve(
+      options.worktreeRoot?.trim() || join(options.userDataDir, "worktrees"),
+    );
     this.isAppWorktreePath = appWorktreeRootMatcher(this.worktreeRoot);
     this.worktreeManager = new GitWorktreeManager({
       catalogStorage: this.catalogStore,
@@ -283,6 +295,7 @@ export class DesktopAppStore {
     });
     this.uiStateFilePath = join(options.userDataDir, "ui-state.json");
     this.scheduledTasksFilePath = join(options.userDataDir, "scheduled-tasks.json");
+    this.studioRunsFilePath = join(options.userDataDir, "studio-runs.json");
     this.attachmentStore = new AttachmentStore(options.userDataDir);
     this.initialWorkspacePaths = options.initialWorkspacePaths;
     this.getWindow = options.getWindow ?? (() => null);
@@ -457,6 +470,7 @@ export class DesktopAppStore {
         selectedSessionId: this.state.selectedSessionId,
         workspaces: structuredClone(this.state.workspaces),
         orchestrationChildren: structuredClone(this.state.orchestrationChildren),
+        studioRuns: structuredClone(this.state.studioRuns),
       }),
       replaceOrchestrationChildren: (children) => {
         this.state = { ...this.state, orchestrationChildren: [...children] };
@@ -472,6 +486,7 @@ export class DesktopAppStore {
       subscribeToSessionEvents: (listener) => this.subscribeToSessionEvents(listener),
       updateSessionConfig: (sessionRef, config) => this.updateSessionConfig(sessionRef, config),
       buildCreateSessionOptions: (workspaceId) => this.buildCreateSessionOptions(workspaceId),
+      createChildSession: (input) => this.workspaceOwner.createChildSession(input),
       getQueuedComposerMessages: (sessionRef) => this.getQueuedComposerMessages(sessionRef),
       seedSession: (snapshot) => {
         const key = sessionKey(snapshot.ref);
@@ -1170,7 +1185,16 @@ export class DesktopAppStore {
 
   async createChildThreadToolResult(
     parentRef: SessionRef,
-    input: { readonly prompt: string; readonly toolCallId: string },
+    input: {
+      readonly prompt: string;
+      readonly toolCallId: string;
+      readonly taskId?: string;
+      readonly role?: string;
+      readonly provider?: string;
+      readonly modelId?: string;
+      readonly thinkingLevel?: string;
+      readonly environment?: "local" | "worktree";
+    },
   ) {
     await this.initialize();
     return this.orchestrationOwner.createChildThreadToolResult(parentRef, input);
@@ -1193,10 +1217,102 @@ export class DesktopAppStore {
     return this.orchestrationOwner.sendMessageToThreadToolResult(parentRef, input);
   }
 
+  async waitForChildThreadsToolResult(
+    parentRef: SessionRef,
+    input: {
+      readonly threadIds: readonly string[];
+      readonly timeoutMs: number;
+      readonly signal: AbortSignal;
+    },
+  ) {
+    await this.initialize();
+    return this.orchestrationOwner.waitForChildThreadsToolResult(parentRef, input);
+  }
+
   async setChildSupervisionLoop(input: SetChildSupervisionLoopInput): Promise<DesktopAppState> {
     const state = await this.orchestrationOwner.setChildSupervisionLoopGate(input);
     this.scheduleOrchestrationSupervision();
     return state;
+  }
+
+  async saveStudioRun(run: StudioRun): Promise<DesktopAppState> {
+    await this.initialize();
+    const rootWorkspaceId = resolveRepoWorkspaceId(this.state.workspaces, run.workspaceId);
+    const root = this.state.workspaces.find(({ id }) => id === rootWorkspaceId);
+    if (!root || resolve(root.path).toLowerCase() !== resolve(run.repositoryPath).toLowerCase()) {
+      throw new Error("Studio run must target its project's root repository.");
+    }
+    const current = this.state.studioRuns.find(({ id }) => id === run.id);
+    if (
+      current &&
+      (current.workspaceId !== run.workspaceId || run.revision !== current.revision + 1)
+    ) {
+      throw new Error("Studio run changed elsewhere; reload its current state before saving.");
+    }
+    if (!current && run.revision !== 1)
+      throw new Error("A new Studio run must start at revision 1.");
+    if (current) {
+      const currentSpecificationRevision = current.specificationRevision ?? 1;
+      const nextSpecificationRevision = run.specificationRevision ?? 1;
+      if (
+        nextSpecificationRevision < currentSpecificationRevision ||
+        nextSpecificationRevision > currentSpecificationRevision + 1 ||
+        (run.corrections?.length ?? 0) < (current.corrections?.length ?? 0)
+      ) {
+        throw new Error(
+          "Studio specification corrections changed elsewhere; reload before saving.",
+        );
+      }
+      let permittedMilestones = current.milestones;
+      if (current.status !== run.status) {
+        permittedMilestones = transitionStudioRun(current, run.status, run.updatedAt).milestones;
+      } else if (current.status === "running") {
+        const changed = run.milestones.filter(
+          (milestone) =>
+            current.milestones.find(({ id }) => id === milestone.id)?.status !== milestone.status,
+        );
+        if (changed.length > 1)
+          throw new Error("Update one Studio milestone transition at a time.");
+        if (changed.length === 1) {
+          permittedMilestones = transitionStudioMilestone(
+            current,
+            changed[0]!.id,
+            changed[0]!.status,
+            run.updatedAt,
+          ).milestones;
+        }
+      }
+      const permittedById = new Map(
+        permittedMilestones.map(({ id, status }) => [id, status] as const),
+      );
+      if (
+        run.milestones.some((milestone) => permittedById.get(milestone.id) !== milestone.status)
+      ) {
+        throw new Error("Studio milestone status changes must follow the run lifecycle.");
+      }
+    }
+    const runs = current
+      ? this.state.studioRuns.map((entry) => (entry.id === run.id ? run : entry))
+      : [...this.state.studioRuns, run];
+    const checked = decodeStudioRunsFile({ version: 1, runs });
+    if (!this.studioRunsWritable) throw new Error("Studio run persistence is unavailable.");
+    await writeStudioRunsFile(this.studioRunsFilePath, checked);
+    this.state = {
+      ...this.state,
+      studioRuns: [...checked.runs],
+      revision: this.state.revision + 1,
+    };
+    this.emit();
+    return this.getState();
+  }
+
+  async listStudioRuns(workspaceId: string): Promise<readonly StudioRun[]> {
+    await this.initialize();
+    const rootWorkspaceId = resolveRepoWorkspaceId(this.state.workspaces, workspaceId);
+    if (!rootWorkspaceId) return [];
+    return this.state.studioRuns.filter(
+      (run) => resolveRepoWorkspaceId(this.state.workspaces, run.workspaceId) === rootWorkspaceId,
+    );
   }
 
   async createScheduledTask(input: CreateScheduledTaskInput): Promise<DesktopAppState> {
@@ -1930,6 +2046,21 @@ export class DesktopAppStore {
       startupDiagnostics.push({
         scope: "application",
         message: `Scheduled tasks could not be loaded: ${message}`,
+      });
+    }
+
+    try {
+      const loadedRuns = await readStudioRunsFile(this.studioRunsFilePath);
+      this.state = { ...this.state, studioRuns: [...loadedRuns.runs] };
+      this.studioRunsWritable = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[app-store] studio-runs.json is invalid; Studio persistence disabled", error);
+      this.studioRunsWritable = false;
+      this.state = { ...this.state, studioRuns: [] };
+      startupDiagnostics.push({
+        scope: "application",
+        message: `Studio runs could not be loaded: ${message}`,
       });
     }
 

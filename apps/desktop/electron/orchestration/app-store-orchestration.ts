@@ -25,7 +25,9 @@ import type {
   TimelineToolCall,
   TranscriptMessage,
 } from "../../contracts/desktop-state";
+import type { StudioRun } from "../../contracts/studio-runs";
 import { latestSessionActivityAt, previewFromTranscript } from "../application/app-store-utils";
+import { childTurnHasFinalAssistantMessage } from "./child-turn-completion";
 import type { RefreshStateOptions } from "../application/refresh-state-options";
 import {
   createChildThreadAction,
@@ -40,13 +42,16 @@ import {
   sendMessageToThreadAction,
   sendMessageToThreadFromToolOutput,
   sendMessageToThreadToolName,
+  waitForChildThreadsAction,
 } from "./orchestration-runtime";
+import type { CreateChildThreadOptions } from "./orchestration-runtime";
 import type {
   CreateChildThreadToolDetails,
   ListThreadsToolDetails,
   OrchestrationThreadListEntry,
   ReadThreadToolDetails,
   SendMessageToThreadToolDetails,
+  WaitForChildThreadsToolDetails,
 } from "./orchestration-runtime";
 
 const CHILD_TITLE_LIMIT = 56;
@@ -57,6 +62,8 @@ const DEFAULT_SUPERVISION_INTERVAL_MS = 60_000;
 const MIN_SUPERVISION_INTERVAL_MS = 250;
 const CHILD_START_TIMEOUT_MS = 10_000;
 const CHILD_RUNNING_FAILURE_GRACE_MS = 1_000;
+const MAX_ACTIVE_CHILD_THREADS = 2;
+const WORKTREE_REQUIRED_ROLES = new Set(["IMPLEMENTER", "FAST_WORKER", "RELEASE_ENGINEER"]);
 const pendingCreateChildThreadToolCalls = new Set<string>();
 const execFileAsync = promisify(execFile);
 
@@ -65,6 +72,7 @@ interface OrchestrationStateView {
   readonly selectedSessionId?: string;
   readonly workspaces: DesktopAppState["workspaces"];
   readonly orchestrationChildren: readonly OrchestrationChildThread[];
+  readonly studioRuns: readonly StudioRun[];
 }
 
 type OrchestrationDriver = Pick<PiSdkDriver, "cancelCurrentRun" | "createSession">;
@@ -91,6 +99,18 @@ interface OrchestrationOwnerHost {
   ): () => void;
   updateSessionConfig(sessionRef: SessionRef, config: SessionConfig | undefined): void;
   buildCreateSessionOptions(workspaceId: string): Promise<CreateSessionOptions | undefined>;
+  createChildSession(input: {
+    readonly rootWorkspaceId: string;
+    readonly environment: "local" | "worktree";
+    readonly prompt: string;
+    readonly provider?: string;
+    readonly modelId?: string;
+    readonly thinkingLevel?: string;
+  }): Promise<{
+    readonly snapshot: SessionSnapshot;
+    readonly workspacePath: string;
+    readonly branchName?: string;
+  }>;
   getQueuedComposerMessages(
     sessionRef: SessionRef,
   ): readonly import("../../contracts/desktop-state").QueuedComposerMessage[];
@@ -129,7 +149,7 @@ export interface OrchestrationOwner {
   hasOrchestrationParentSession(sessionRef: SessionRef): boolean;
   createChildThreadToolResult(
     parentRef: SessionRef,
-    input: { readonly prompt: string; readonly toolCallId: string },
+    input: { readonly prompt: string; readonly toolCallId: string } & CreateChildThreadOptions,
   ): Promise<AgentToolResult<CreateChildThreadToolDetails>>;
   listThreadsToolResult(parentRef: SessionRef): AgentToolResult<ListThreadsToolDetails>;
   readThreadToolResult(
@@ -140,6 +160,14 @@ export interface OrchestrationOwner {
     parentRef: SessionRef,
     input: { readonly threadId: string; readonly message: string },
   ): Promise<AgentToolResult<SendMessageToThreadToolDetails>>;
+  waitForChildThreadsToolResult(
+    parentRef: SessionRef,
+    input: {
+      readonly threadIds: readonly string[];
+      readonly timeoutMs: number;
+      readonly signal: AbortSignal;
+    },
+  ): Promise<AgentToolResult<WaitForChildThreadsToolDetails>>;
 }
 
 export function createOrchestrationOwner(store: OrchestrationOwnerHost): OrchestrationOwner {
@@ -165,6 +193,8 @@ export function createOrchestrationOwner(store: OrchestrationOwnerHost): Orchest
     readThreadToolResult: (parentRef, threadId) => readThreadToolResult(store, parentRef, threadId),
     sendMessageToThreadToolResult: (parentRef, input) =>
       sendMessageToThreadToolResult(store, parentRef, input),
+    waitForChildThreadsToolResult: (parentRef, input) =>
+      waitForChildThreadsToolResult(store, parentRef, input),
   };
 }
 
@@ -173,6 +203,12 @@ interface SpawnChildThreadInput {
   readonly parentSessionId: string;
   readonly prompt: string;
   readonly sourceToolCallId?: string;
+  readonly taskId?: string;
+  readonly role?: string;
+  readonly provider?: string;
+  readonly modelId?: string;
+  readonly thinkingLevel?: string;
+  readonly environment?: "local" | "worktree";
 }
 
 interface CreatedChildThreadResult {
@@ -203,13 +239,51 @@ async function createChildThreadRecord(
     throw new Error(`Unknown workspace: ${input.parentWorkspaceId}`);
   }
 
+  const studioRun = store
+    .orchestrationState()
+    .studioRuns.find(
+      (run) =>
+        run.workspaceId === input.parentWorkspaceId &&
+        run.coordinatorSessionId === input.parentSessionId,
+    );
+  if (studioRun && studioRun.status !== "running") {
+    throw new Error(
+      `Studio run ${studioRun.id} is ${studioRun.status}; no new worker can be dispatched until it is resumed.`,
+    );
+  }
+
+  if (input.taskId && input.taskId.length > 128) {
+    throw new Error("Child task_id must be 128 characters or fewer.");
+  }
+  if (Boolean(input.provider) !== Boolean(input.modelId)) {
+    throw new Error("Child model routing requires both provider and model_id.");
+  }
+  const environment = childEnvironment(input.role, input.environment);
+
   const pendingKey = input.sourceToolCallId ? childToolCallKey(input) : undefined;
-  if (pendingKey && pendingCreateChildThreadToolCalls.has(pendingKey)) {
+  const pendingTaskKey = input.taskId
+    ? childTaskKey(input.parentWorkspaceId, input.parentSessionId, input.taskId)
+    : undefined;
+  if (
+    (pendingKey && pendingCreateChildThreadToolCalls.has(pendingKey)) ||
+    (pendingTaskKey && pendingCreateChildThreadToolCalls.has(pendingTaskKey))
+  ) {
     throw new Error("Child thread creation is already in progress.");
   }
 
   const existing = input.sourceToolCallId ? childForToolCall(store, input) : undefined;
   if (existing) {
+    if (
+      existing.goal !== prompt ||
+      existing.role !== input.role ||
+      existing.environment !== environment ||
+      (input.provider &&
+        (existing.model?.provider !== input.provider ||
+          existing.model.modelId !== input.modelId)) ||
+      (input.thinkingLevel && existing.thinkingLevel !== input.thinkingLevel)
+    ) {
+      throw new Error("Tool call id is already in use with different child thread settings.");
+    }
     if (existing.status === "failed") {
       throw new Error(existing.latestTranscript || "Failed to start child thread.");
     }
@@ -221,29 +295,84 @@ async function createChildThreadRecord(
     };
   }
 
+  const existingTask = input.taskId
+    ? stateChildForTaskId(store, input.parentWorkspaceId, input.parentSessionId, input.taskId)
+    : undefined;
+  if (existingTask) {
+    if (
+      existingTask.goal !== prompt ||
+      existingTask.role !== input.role ||
+      existingTask.environment !== environment ||
+      (input.provider &&
+        (existingTask.model?.provider !== input.provider ||
+          existingTask.model.modelId !== input.modelId)) ||
+      (input.thinkingLevel && existingTask.thinkingLevel !== input.thinkingLevel)
+    ) {
+      throw new Error(`Task id is already in use with different task settings: ${input.taskId}`);
+    }
+    if (existingTask.status === "failed") {
+      throw new Error(existingTask.latestTranscript || "Failed to start child thread.");
+    }
+    const childRef = childSessionRef(existingTask);
+    await store.ensureSessionReady(childRef);
+    return {
+      child: existingTask,
+      deliveryStatus: requireInitialPromptRun(store, childRef, prompt),
+    };
+  }
+
+  const activeChildCount = store
+    .orchestrationState()
+    .orchestrationChildren.filter(
+      (child) =>
+        child.parentWorkspaceId === input.parentWorkspaceId &&
+        child.parentSessionId === input.parentSessionId &&
+        (child.status === "queued" || child.status === "running" || child.status === "waiting"),
+    ).length;
+  if (activeChildCount >= MAX_ACTIVE_CHILD_THREADS) {
+    throw new Error(`At most ${MAX_ACTIVE_CHILD_THREADS} child threads may run concurrently.`);
+  }
+
   if (pendingKey) {
     pendingCreateChildThreadToolCalls.add(pendingKey);
   }
+  if (pendingTaskKey) {
+    pendingCreateChildThreadToolCalls.add(pendingTaskKey);
+  }
   try {
-    const createOptions = await store.buildCreateSessionOptions(input.parentWorkspaceId);
-    const session = await store.driver.createSession(workspace, {
-      ...createOptions,
-      title: titleFromPrompt(prompt),
+    const created = await store.createChildSession({
+      rootWorkspaceId: input.parentWorkspaceId,
+      environment,
+      prompt,
+      ...(input.provider ? { provider: input.provider, modelId: input.modelId } : {}),
+      ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     });
+    const session = created.snapshot;
     const childRef = session.ref;
     store.seedSession(session);
     await store.ensureSessionSubscription(childRef);
 
     const now = new Date().toISOString();
-    const git = await workspaceGitRef(input.parentWorkspaceId, workspace.path);
+    const git = await workspaceGitRef(childRef.workspaceId, created.workspacePath);
     const status = toOrchestrationStatus(session.status, childRef, store);
     const child: OrchestrationChildThread = {
       id: randomUUID(),
       ...(input.sourceToolCallId ? { sourceToolCallId: input.sourceToolCallId } : {}),
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      ...(input.role ? { role: input.role } : {}),
+      ...(session.config?.provider && session.config.modelId
+        ? { model: { provider: session.config.provider, modelId: session.config.modelId } }
+        : {}),
+      ...((session.config?.thinkingLevel ?? input.thinkingLevel)
+        ? { thinkingLevel: session.config?.thinkingLevel ?? input.thinkingLevel }
+        : {}),
+      environment,
       parentWorkspaceId: input.parentWorkspaceId,
       parentSessionId: input.parentSessionId,
       childWorkspaceId: childRef.workspaceId,
       childSessionId: childRef.sessionId,
+      ...(environment === "worktree" ? { worktreePath: created.workspacePath } : {}),
+      ...(created.branchName ? { branchName: created.branchName } : {}),
       title: session.title || titleFromPrompt(prompt),
       goal: prompt,
       status,
@@ -307,6 +436,9 @@ async function createChildThreadRecord(
   } finally {
     if (pendingKey) {
       pendingCreateChildThreadToolCalls.delete(pendingKey);
+    }
+    if (pendingTaskKey) {
+      pendingCreateChildThreadToolCalls.delete(pendingTaskKey);
     }
   }
 }
@@ -507,21 +639,34 @@ async function cancelChildRunsForParent(
 async function createChildThreadToolResult(
   store: OrchestrationOwnerHost,
   parentRef: SessionRef,
-  input: { readonly prompt: string; readonly toolCallId: string },
+  input: { readonly prompt: string; readonly toolCallId: string } & CreateChildThreadOptions,
 ): Promise<AgentToolResult<CreateChildThreadToolDetails>> {
   const { child, deliveryStatus } = await createChildThreadRecord(store, {
     parentWorkspaceId: parentRef.workspaceId,
     parentSessionId: parentRef.sessionId,
     prompt: input.prompt,
     sourceToolCallId: input.toolCallId,
+    taskId: input.taskId,
+    role: input.role,
+    provider: input.provider,
+    modelId: input.modelId,
+    thinkingLevel: input.thinkingLevel,
+    environment: input.environment,
   });
   const details: CreateChildThreadToolDetails = {
     action: createChildThreadAction,
     prompt: input.prompt.trim(),
+    ...(input.taskId ? { taskId: input.taskId } : {}),
+    ...(input.role ? { role: input.role } : {}),
+    ...(child.model ? { provider: child.model.provider, modelId: child.model.modelId } : {}),
+    ...(child.thinkingLevel ? { thinkingLevel: child.thinkingLevel } : {}),
+    environment: child.environment,
     childThreadId: child.id,
     childWorkspaceId: child.childWorkspaceId,
     childSessionId: child.childSessionId,
     title: child.title,
+    ...(child.worktreePath ? { worktreePath: child.worktreePath } : {}),
+    ...(child.branchName ? { branchName: child.branchName } : {}),
     deliveryStatus,
   };
 
@@ -663,6 +808,21 @@ async function sendMessageToThreadToolResult(
   parentRef: SessionRef,
   input: { readonly threadId: string; readonly message: string },
 ): Promise<AgentToolResult<SendMessageToThreadToolDetails>> {
+  const studioRun = store
+    .orchestrationState()
+    .studioRuns.find(
+      (run) =>
+        run.workspaceId === parentRef.workspaceId &&
+        run.coordinatorSessionId === parentRef.sessionId,
+    );
+  if (studioRun && studioRun.status !== "running") {
+    return sendMessageToThreadErrorResult(
+      input.threadId,
+      input.message,
+      `Studio run ${studioRun.id} is ${studioRun.status}; no worker follow-up can be sent until it is resumed.`,
+    );
+  }
+
   const target = resolveThreadTarget(store, parentRef, input.threadId);
   if (!target) {
     return sendMessageToThreadErrorResult(
@@ -701,6 +861,110 @@ async function sendMessageToThreadToolResult(
   return {
     content: [{ type: "text", text: formatSendMessageToThreadResult(details) }],
     details,
+  };
+}
+
+async function waitForChildThreadsToolResult(
+  store: OrchestrationOwnerHost,
+  parentRef: SessionRef,
+  input: {
+    readonly threadIds: readonly string[];
+    readonly timeoutMs: number;
+    readonly signal: AbortSignal;
+  },
+): Promise<AgentToolResult<WaitForChildThreadsToolDetails>> {
+  const requested = new Set(input.threadIds);
+  const matchingChildren = () =>
+    store
+      .orchestrationState()
+      .orchestrationChildren.filter(
+        (child) =>
+          child.parentWorkspaceId === parentRef.workspaceId &&
+          child.parentSessionId === parentRef.sessionId &&
+          (requested.has(child.id) ||
+            requested.has(child.childSessionId) ||
+            Boolean(child.taskId && requested.has(child.taskId))),
+      );
+  const initial = matchingChildren();
+  const missing = input.threadIds.filter(
+    (id) =>
+      !initial.some(
+        (child) => child.id === id || child.childSessionId === id || child.taskId === id,
+      ),
+  );
+  if (missing.length > 0) {
+    const error = `Unknown child thread ids: ${missing.join(", ")}`;
+    return {
+      content: [{ type: "text", text: error }],
+      details: { action: waitForChildThreadsAction, error },
+    };
+  }
+
+  await Promise.all(initial.map((child) => store.ensureSessionReady(childSessionRef(child))));
+  const snapshot = () =>
+    matchingChildren().map((child) => ({
+      threadId: child.id,
+      title: child.title,
+      status: child.status,
+      ...(child.role ? { role: child.role } : {}),
+      ...(child.model ? { provider: child.model.provider, modelId: child.model.modelId } : {}),
+    }));
+  const hasTerminalResult = () =>
+    snapshot().some((thread) => thread.status === "complete" || thread.status === "failed");
+
+  let timedOut = false;
+  let aborted = input.signal.aborted;
+  if (!hasTerminalResult() && !aborted) {
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let unsubscribe: () => void = () => {};
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        unsubscribe();
+        input.signal.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      const check = () => {
+        if (hasTerminalResult()) finish();
+      };
+      const onAbort = () => {
+        aborted = true;
+        finish();
+      };
+      unsubscribe = store.subscribeToSessionEvents(check);
+      timer = setTimeout(() => {
+        timedOut = true;
+        finish();
+      }, input.timeoutMs);
+      input.signal.addEventListener("abort", onAbort, { once: true });
+      if (input.signal.aborted) onAbort();
+      else queueMicrotask(check);
+    });
+  }
+  const threads = snapshot();
+  const label = timedOut ? "Wait timed out" : aborted ? "Wait cancelled" : "Child status changed";
+  return {
+    content: [
+      {
+        type: "text",
+        text: `${label}:\n${threads
+          .map(
+            (thread) =>
+              `- ${thread.title}: ${thread.status}` +
+              (thread.provider && thread.modelId ? ` (${thread.provider}/${thread.modelId})` : ""),
+          )
+          .join("\n")}`,
+      },
+    ],
+    details: {
+      action: waitForChildThreadsAction,
+      threads,
+      ...(timedOut ? { timedOut: true } : {}),
+      ...(aborted ? { aborted: true } : {}),
+    },
   };
 }
 
@@ -1244,9 +1508,17 @@ function updateCreateChildThreadToolOutput(
       action: createChildThreadAction,
       prompt,
       childThreadId: child.id,
+      taskId: child.taskId,
+      role: child.role,
+      provider: child.model?.provider,
+      modelId: child.model?.modelId,
+      thinkingLevel: child.thinkingLevel,
+      environment: child.environment,
       childWorkspaceId: child.childWorkspaceId,
       childSessionId: child.childSessionId,
       title: child.title,
+      worktreePath: child.worktreePath,
+      branchName: child.branchName,
       deliveryStatus,
     },
   });
@@ -1526,6 +1798,9 @@ function listThreadsForContext(
         updatedAt: child?.updatedAt ?? session.updatedAt,
         preview: child?.latestTranscript ?? session.preview,
         ...(child ? { childThreadId: child.id } : {}),
+        ...(child?.role ? { role: child.role } : {}),
+        ...(child?.model ? { provider: child.model.provider, modelId: child.model.modelId } : {}),
+        ...(child?.environment ? { environment: child.environment } : {}),
       });
     }
   }
@@ -1546,6 +1821,9 @@ function listThreadsForContext(
       updatedAt: child.updatedAt,
       preview: child.latestTranscript,
       childThreadId: child.id,
+      ...(child.role ? { role: child.role } : {}),
+      ...(child.model ? { provider: child.model.provider, modelId: child.model.modelId } : {}),
+      ...(child.environment ? { environment: child.environment } : {}),
     });
   }
 
@@ -1665,6 +1943,10 @@ function formatCreateChildThreadResult(result: CreateChildThreadToolDetails): st
     `childThreadId: ${result.childThreadId ?? ""}\n` +
     `childWorkspaceId: ${result.childWorkspaceId ?? ""}\n` +
     `childSessionId: ${result.childSessionId ?? ""}` +
+    (result.role ? `\nrole: ${result.role}` : "") +
+    (result.provider && result.modelId ? `\nmodel: ${result.provider}/${result.modelId}` : "") +
+    (result.environment ? `\nenvironment: ${result.environment}` : "") +
+    (result.branchName ? `\nbranch: ${result.branchName}` : "") +
     (result.deliveryStatus ? `\ninitialPrompt: ${result.deliveryStatus}` : "")
   );
 }
@@ -2010,10 +2292,43 @@ function childForToolCall(
     );
 }
 
+function stateChildForTaskId(
+  store: OrchestrationOwnerHost,
+  parentWorkspaceId: string,
+  parentSessionId: string,
+  taskId: string,
+): OrchestrationChildThread | undefined {
+  return store
+    .orchestrationState()
+    .orchestrationChildren.find(
+      (child) =>
+        child.taskId === taskId &&
+        child.parentWorkspaceId === parentWorkspaceId &&
+        child.parentSessionId === parentSessionId,
+    );
+}
+
+function childEnvironment(
+  role: string | undefined,
+  requested: "local" | "worktree" | undefined,
+): "local" | "worktree" {
+  if (role && WORKTREE_REQUIRED_ROLES.has(role)) {
+    if (requested === "local") {
+      throw new Error(`${role} tasks require a managed worktree for isolation.`);
+    }
+    return "worktree";
+  }
+  return requested ?? "local";
+}
+
 function childToolCallKey(
   input: Pick<SpawnChildThreadInput, "parentWorkspaceId" | "parentSessionId" | "sourceToolCallId">,
 ): string {
   return `${input.parentWorkspaceId}\0${input.parentSessionId}\0${input.sourceToolCallId ?? ""}`;
+}
+
+function childTaskKey(parentWorkspaceId: string, parentSessionId: string, taskId: string): string {
+  return `${parentWorkspaceId}\0${parentSessionId}\0task:${taskId}`;
 }
 
 function isTimelineToolCall(value: TranscriptMessage): value is TimelineToolCall {
@@ -2041,18 +2356,17 @@ function toOrchestrationStatus(
   if (status === "running") {
     return "running";
   }
+  const transcript = store.transcriptFor(sessionRef);
   // An idle session that has never produced a run is queued, not complete. The
   // child record is inserted before its prompt is void-fired, so without this a
   // never-started child would read "complete" and trigger a false parent wake.
-  if (!hasStartedRun(store, sessionRef)) {
+  if (!transcript.some(isWorkerResponse)) {
     return "queued";
   }
-  return "complete";
-}
-
-function hasStartedRun(store: OrchestrationOwnerHost, sessionRef: SessionRef): boolean {
-  const transcript = store.transcriptFor(sessionRef);
-  return transcript.some(isWorkerResponse);
+  // A process restart can leave a tool result as the final transcript item,
+  // before Pi resumes the provider turn. Keep that worker resumable rather than
+  // waking the parent with a false completion.
+  return childTurnHasFinalAssistantMessage(transcript) ? "complete" : "waiting";
 }
 
 function toChildTranscript(

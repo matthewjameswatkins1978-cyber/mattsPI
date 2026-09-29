@@ -10,6 +10,7 @@ export type SessionStatus = "idle" | "running" | "failed";
 export type { SessionRole, TimelineToolCall, TranscriptMessage } from "./timeline-types";
 import type { TranscriptMessage } from "./timeline-types";
 import type { ScheduledTaskRecord } from "./scheduled-tasks";
+import type { StudioRun } from "./studio-runs";
 export type {
   CreateScheduledTaskInput,
   ScheduledTaskFilter,
@@ -20,7 +21,8 @@ export type {
   UpdateScheduledTaskInput,
 } from "./scheduled-tasks";
 
-export type AppView = "threads" | "new-thread" | "scheduled" | "skills" | "extensions" | "settings";
+export type AppView =
+  "threads" | "new-thread" | "scheduled" | "studio" | "skills" | "extensions" | "settings";
 export type WorkspaceKind = "primary" | "worktree";
 export type WorktreeStatus = "ready" | "missing" | "error";
 export type NewThreadEnvironment = "local" | "worktree";
@@ -180,10 +182,17 @@ export interface OrchestrationChildTranscriptMessage {
 export interface OrchestrationChildThread {
   readonly id: string;
   readonly sourceToolCallId?: string;
+  readonly taskId?: string;
+  readonly role?: string;
+  readonly model?: { readonly provider: string; readonly modelId: string };
+  readonly thinkingLevel?: string;
+  readonly environment?: "local" | "worktree";
   readonly parentWorkspaceId: string;
   readonly parentSessionId: string;
   readonly childWorkspaceId: string;
   readonly childSessionId: string;
+  readonly worktreePath?: string;
+  readonly branchName?: string;
   readonly title: string;
   readonly goal: string;
   readonly status: OrchestrationChildThreadStatus;
@@ -339,6 +348,7 @@ export interface DesktopAppState {
   >;
   readonly orchestrationChildren: readonly OrchestrationChildThread[];
   readonly scheduledTasks: readonly ScheduledTaskRecord[];
+  readonly studioRuns: readonly StudioRun[];
   readonly notificationPreferences: NotificationPreferences;
   readonly integratedTerminalShell: string;
   readonly lastViewedAtBySession: Readonly<Record<string, string>>;
@@ -387,6 +397,7 @@ export function createEmptyDesktopAppState(): DesktopAppState {
     extensionCommandCompatibilityByWorkspace: {},
     orchestrationChildren: [],
     scheduledTasks: [],
+    studioRuns: [],
     notificationPreferences: {
       backgroundCompletion: true,
       backgroundFailure: true,
