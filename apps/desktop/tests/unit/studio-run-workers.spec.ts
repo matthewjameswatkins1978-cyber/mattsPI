@@ -25,6 +25,7 @@ const milestone: StudioMilestone = {
   status: "running",
   workerThreadIds: ["worker-1", "unloaded-worker"],
   worktreeIds: [],
+  deliveryRequirement: "github-pr",
   updatedAt: "2026-09-29T00:00:00.000Z",
 };
 

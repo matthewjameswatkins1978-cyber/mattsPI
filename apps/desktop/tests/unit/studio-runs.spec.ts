@@ -7,9 +7,11 @@ import {
   recordStudioGitHubCheckpoint,
   recordStudioGitHubReview,
   recordStudioCorrection,
+  isStudioMilestoneDependencySatisfied,
   studioExternalReviewStatus,
   transitionStudioMilestone,
   transitionStudioRun,
+  type StudioMilestone,
   type StudioRun,
 } from "../../contracts/studio-runs";
 import { decodeStudioRunsFile } from "../../electron/studio/studio-run-store";
@@ -33,6 +35,7 @@ const run: StudioRun = {
       status: "queued",
       workerThreadIds: [],
       worktreeIds: [],
+      deliveryRequirement: "github-pr",
       updatedAt: "2026-09-28T00:00:00.000Z",
     },
     {
@@ -43,6 +46,7 @@ const run: StudioRun = {
       status: "queued",
       workerThreadIds: [],
       worktreeIds: [],
+      deliveryRequirement: "github-pr",
       updatedAt: "2026-09-28T00:00:00.000Z",
     },
   ],
@@ -409,8 +413,12 @@ test.describe("Studio run plan state", () => {
   });
 
   test("makes only dependency-ready queued milestones dispatchable", () => {
-    expect(availableStudioMilestones(run).map(({ id }) => id)).toEqual(["m1"]);
-    const started = transitionStudioMilestone(run, "m1", "running");
+    const localRun: StudioRun = {
+      ...run,
+      milestones: run.milestones.map((m) => ({ ...m, deliveryRequirement: "local" as const })),
+    };
+    expect(availableStudioMilestones(localRun).map(({ id }) => id)).toEqual(["m1"]);
+    const started = transitionStudioMilestone(localRun, "m1", "running");
     expect(availableStudioMilestones(started)).toEqual([]);
     const verifying = transitionStudioMilestone(started, "m1", "verifying");
     const completed = transitionStudioMilestone(verifying, "m1", "complete");
@@ -514,6 +522,155 @@ test.describe("Studio run plan state", () => {
       "complete",
     );
     expect(availableStudioMilestones(localM1Complete).map(({ id }) => id)).toEqual(["m2", "m3"]);
+  });
+
+  test("omitted delivery requirements block dispatch in autonomous workflow and are rejected for new plans", () => {
+    // 1. Omitted delivery requirement in autonomous workflow: local completion does not unlock dependent
+    const omittedRun: StudioRun = {
+      ...run,
+      milestones: [
+        { ...run.milestones[0]!, deliveryRequirement: undefined },
+        { ...run.milestones[1]!, deliveryRequirement: undefined },
+      ],
+    };
+    const started = transitionStudioMilestone(omittedRun, "m1", "running");
+    const verifying = transitionStudioMilestone(started, "m1", "verifying");
+    const completed = transitionStudioMilestone(verifying, "m1", "complete");
+    // Missing requirement is NOT silently treated as local-only: m2 is blocked!
+    expect(availableStudioMilestones(completed)).toEqual([]);
+
+    // 2. Newly planned run requires deliveryRequirement on every milestone
+    expect(() =>
+      preserveStudioRunHistory(undefined, omittedRun),
+    ).toThrow("Every newly planned milestone must declare a delivery requirement");
+
+    // 3. Appending a milestone without deliveryRequirement is rejected
+    expect(() =>
+      preserveStudioRunHistory(run, {
+        ...run,
+        milestones: [
+          ...run.milestones,
+          {
+            id: "m3",
+            title: "M3",
+            instruction: "Do M3",
+            dependsOn: [],
+            status: "queued",
+            workerThreadIds: [],
+            worktreeIds: [],
+            updatedAt: "2026-09-28T00:00:00.000Z",
+          },
+        ],
+      }),
+    ).toThrow("Every newly planned milestone must declare a delivery requirement");
+
+    // 4. Legacy compatibility: legacy runs with omitted deliveryRequirement decode safely
+    const legacy = {
+      ...run,
+      milestones: [
+        {
+          id: "m1",
+          title: "M1",
+          instruction: "Do M1",
+          dependsOn: [],
+          status: "complete",
+          workerThreadIds: [],
+          worktreeIds: [],
+          updatedAt: "2026-09-28T00:00:00.000Z",
+        },
+      ],
+    };
+    const decoded = decodeStudioRunsFile({ version: 1, runs: [legacy] }).runs[0]!;
+    expect(decoded.milestones[0]!.id).toBe("m1");
+    // Legacy milestone without PR metadata retains undefined, which the scheduler blocks from bypassing merge
+    expect(isStudioMilestoneDependencySatisfied(decoded.milestones[0]!)).toBe(false);
+  });
+
+  test("rejects conflicting local and GitHub PR states and prevents bypass", () => {
+    const headSha = "b".repeat(40);
+    const baseSha = "a".repeat(40);
+    const localMilestoneWithPr: StudioMilestone = {
+      id: "m1",
+      title: "Local task",
+      instruction: "Local instructions",
+      dependsOn: [],
+      status: "complete",
+      workerThreadIds: [],
+      worktreeIds: [],
+      deliveryRequirement: "local",
+      pullRequestUrl: "https://github.com/owner/repo/pull/42",
+      updatedAt: "2026-09-28T00:00:00.000Z",
+    };
+
+    // 1. decodeStudioRunsFile rejects contradictory state
+    expect(() =>
+      decodeStudioRunsFile({
+        version: 1,
+        runs: [{ ...run, milestones: [localMilestoneWithPr] }],
+      }),
+    ).toThrow("Contradictory milestone delivery requirement");
+
+    // 2. preserveStudioRunHistory rejects contradictory state on new run
+    expect(() =>
+      preserveStudioRunHistory(undefined, { ...run, milestones: [localMilestoneWithPr] }),
+    ).toThrow("Contradictory milestone delivery requirement");
+
+    // 3. recordStudioGitHubCheckpoint rejects recording PR checkpoint for local-only milestone
+    expect(() =>
+      recordStudioGitHubCheckpoint(
+        { ...run.milestones[0]!, deliveryRequirement: "local" },
+        {
+          repository: "owner/repo",
+          branch: "studio/local",
+          pullRequestUrl: "https://github.com/owner/repo/pull/42",
+          baseSha,
+          headSha,
+          pushedAt: "2026-09-28T00:00:00.000Z",
+        },
+      ),
+    ).toThrow("Cannot record a GitHub checkpoint for a local-only milestone");
+
+    // 4. isStudioMilestoneDependencySatisfied never bypasses merge verification if PR URL exists on local milestone
+    expect(isStudioMilestoneDependencySatisfied(localMilestoneWithPr)).toBe(false);
+  });
+
+  test("rejects attempted delivery requirement changes on existing milestones", () => {
+    const currentRun: StudioRun = {
+      ...run,
+      milestones: [
+        { ...run.milestones[0]!, deliveryRequirement: "github-pr" },
+        run.milestones[1]!,
+      ],
+    };
+
+    // Changing from github-pr to local
+    expect(() =>
+      preserveStudioRunHistory(currentRun, {
+        ...currentRun,
+        milestones: [
+          { ...currentRun.milestones[0]!, deliveryRequirement: "local" },
+          currentRun.milestones[1]!,
+        ],
+      }),
+    ).toThrow("Existing Studio milestone identities and dependencies are immutable");
+
+    // Changing from local to github-pr
+    const localRun: StudioRun = {
+      ...run,
+      milestones: [
+        { ...run.milestones[0]!, deliveryRequirement: "local" },
+        run.milestones[1]!,
+      ],
+    };
+    expect(() =>
+      preserveStudioRunHistory(localRun, {
+        ...localRun,
+        milestones: [
+          { ...localRun.milestones[0]!, deliveryRequirement: "github-pr" },
+          localRun.milestones[1]!,
+        ],
+      }),
+    ).toThrow("Existing Studio milestone identities and dependencies are immutable");
   });
 
   test("gates dispatch while paused and does not allow premature completion", () => {

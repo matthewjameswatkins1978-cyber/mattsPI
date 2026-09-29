@@ -95,6 +95,9 @@ export function recordStudioGitHubCheckpoint(
   milestone: StudioMilestone,
   input: Omit<StudioGitHubCheckpoint, "reviewHistory"> & { readonly now?: string },
 ): StudioMilestone {
+  if (milestone.deliveryRequirement === "local") {
+    throw new Error("Cannot record a GitHub checkpoint for a local-only milestone.");
+  }
   if (!validSha(input.baseSha) || !validSha(input.headSha)) {
     throw new Error("GitHub checkpoint requires full base and pushed HEAD SHAs.");
   }
@@ -366,6 +369,26 @@ export function preserveStudioRunHistory(
     ) {
       throw new Error("GitHub review evidence requires its authorised confirmation path.");
     }
+    for (const milestone of next.milestones) {
+      if (
+        milestone.deliveryRequirement !== "github-pr" &&
+        milestone.deliveryRequirement !== "local"
+      ) {
+        throw new Error(
+          `Every newly planned milestone must declare a delivery requirement ("github-pr" | "local"): milestone "${milestone.id}" is missing one.`,
+        );
+      }
+      if (
+        milestone.deliveryRequirement === "local" &&
+        (milestone.pullRequestUrl !== undefined ||
+          milestone.checkpointSha !== undefined ||
+          (milestone.githubCheckpoints?.length ?? 0) > 0)
+      ) {
+        throw new Error(
+          `Contradictory milestone delivery requirement: local milestone "${milestone.id}" cannot have GitHub checkpoints or PR URL.`,
+        );
+      }
+    }
     return next;
   }
   if (next.milestones.length < current.milestones.length) {
@@ -444,6 +467,24 @@ export function preserveStudioRunHistory(
     const previous = current.milestones[index];
     if (!previous) {
       if (
+        milestone.deliveryRequirement !== "github-pr" &&
+        milestone.deliveryRequirement !== "local"
+      ) {
+        throw new Error(
+          `Every newly planned milestone must declare a delivery requirement ("github-pr" | "local"): milestone "${milestone.id}" is missing one.`,
+        );
+      }
+      if (
+        milestone.deliveryRequirement === "local" &&
+        (milestone.pullRequestUrl !== undefined ||
+          milestone.checkpointSha !== undefined ||
+          (milestone.githubCheckpoints?.length ?? 0) > 0)
+      ) {
+        throw new Error(
+          `Contradictory milestone delivery requirement: local milestone "${milestone.id}" cannot have GitHub checkpoints or PR URL.`,
+        );
+      }
+      if (
         (milestone.githubCheckpoints ?? []).some(({ reviewHistory }) => reviewHistory.length > 0)
       ) {
         throw new Error("GitHub review evidence requires its authorised confirmation path.");
@@ -455,10 +496,19 @@ export function preserveStudioRunHistory(
       milestone.title !== previous.title ||
       milestone.instruction !== previous.instruction ||
       JSON.stringify(milestone.dependsOn) !== JSON.stringify(previous.dependsOn) ||
-      (previous.deliveryRequirement !== undefined &&
-        milestone.deliveryRequirement !== previous.deliveryRequirement)
+      milestone.deliveryRequirement !== previous.deliveryRequirement
     ) {
       throw new Error("Existing Studio milestone identities and dependencies are immutable.");
+    }
+    if (
+      milestone.deliveryRequirement === "local" &&
+      (milestone.pullRequestUrl !== undefined ||
+        milestone.checkpointSha !== undefined ||
+        (milestone.githubCheckpoints?.length ?? 0) > 0)
+    ) {
+      throw new Error(
+        `Contradictory milestone delivery requirement: local milestone "${milestone.id}" cannot have GitHub checkpoints or PR URL.`,
+      );
     }
     if (
       !isPrefix(previous.workerThreadIds, milestone.workerThreadIds) ||
@@ -643,11 +693,9 @@ export interface StudioRunsFile {
 
 export function isStudioMilestoneDependencySatisfied(milestone: StudioMilestone): boolean {
   if (milestone.status !== "complete") return false;
-  if (milestone.deliveryRequirement === "local") {
-    return true;
-  }
+  // A milestone with a PR URL or GitHub checkpoints must always require merge confirmation;
+  // it must never bypass merge verification even if deliveryRequirement says "local".
   if (
-    milestone.deliveryRequirement === "github-pr" ||
     Boolean(milestone.pullRequestUrl) ||
     Boolean(milestone.githubCheckpoints && milestone.githubCheckpoints.length > 0)
   ) {
@@ -661,7 +709,12 @@ export function isStudioMilestoneDependencySatisfied(milestone: StudioMilestone)
         Boolean(observedAt && mergeCommitSha && mergedAt),
     );
   }
-  return true;
+  if (milestone.deliveryRequirement === "local") {
+    return true;
+  }
+  // For 'github-pr' or an omitted requirement in the autonomous GitHub delivery workflow,
+  // do not silently interpret a missing value as local-only: merge confirmation is required.
+  return false;
 }
 
 export function availableStudioMilestones(run: StudioRun): readonly StudioMilestone[] {

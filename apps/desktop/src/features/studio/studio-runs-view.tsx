@@ -49,6 +49,7 @@ function createDraftRun(
         status: "queued",
         workerThreadIds: [],
         worktreeIds: [],
+        deliveryRequirement: "github-pr",
         updatedAt: now,
       },
     ],

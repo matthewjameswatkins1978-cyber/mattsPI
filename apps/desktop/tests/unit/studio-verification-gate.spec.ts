@@ -12,6 +12,7 @@ const milestone: StudioMilestone = {
   status: "verifying",
   workerThreadIds: ["inspector-1"],
   worktreeIds: [],
+  deliveryRequirement: "github-pr",
   updatedAt: "2026-09-29T00:00:00.000Z",
 };
 const currentRun: StudioRun = {

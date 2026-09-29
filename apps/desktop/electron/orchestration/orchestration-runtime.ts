@@ -457,7 +457,7 @@ function createSaveStudioRunTool(
       "Persist the current Matthew Way Studio run plan and lifecycle state for this project. Call list_studio_runs first and copy project.workspaceId and project.repositoryPath exactly; never invent project identity. The run must use the complete version-1 StudioRun schema shown below.",
     promptSnippet: "save_studio_run: persist a project-scoped Studio plan and progress update.",
     promptGuidelines: [
-      "Call list_studio_runs before saving to obtain the current project's exact workspaceId and repositoryPath. Use a complete StudioRun object: id, workspaceId, repositoryPath, specification (string), mode (observed or autonomous), status (draft/running/paused/stopped/completed/blocked), milestones, createdAt, updatedAt, and integer revision. Each milestone requires id, title, instruction, dependsOn, status, workerThreadIds, worktreeIds, and updatedAt; checkpointSha, pullRequestUrl, and append-only githubCheckpoints are optional. Internal milestone complete means internally accepted only; never infer Lucy acceptance or merge from it.",
+      "Call list_studio_runs before saving to obtain the current project's exact workspaceId and repositoryPath. Use a complete StudioRun object: id, workspaceId, repositoryPath, specification (string), mode (observed or autonomous), status (draft/running/paused/stopped/completed/blocked), milestones, createdAt, updatedAt, and integer revision. Each milestone requires id, title, instruction, dependsOn, status, workerThreadIds, worktreeIds, deliveryRequirement ('github-pr' | 'local'), and updatedAt; checkpointSha, pullRequestUrl, and append-only githubCheckpoints are optional. Internal milestone complete means internally accepted only; never infer Lucy acceptance or merge from it.",
       "Preserve specificationRevision and the complete corrections array when updating an existing run. A prepared correction is not applied until its impact and affected dependencies have been reconciled against the repository and active workers.",
       "Studio correction history is append-only. Mark prepared as sent only after acting on the correction packet. Mark sent as applied only after reconciling the affected milestones; include a concise reconciliationSummary. Existing milestone IDs, instructions and dependencies are immutable: progress affected work through the normal lifecycle and append replacement milestones with new IDs when the plan changes.",
       "Save the full original specification and milestone/dependency plan before dispatching child work.",
@@ -531,6 +531,7 @@ function createSaveStudioRunTool(
                   "status",
                   "workerThreadIds",
                   "worktreeIds",
+                  "deliveryRequirement",
                   "updatedAt",
                 ],
               },

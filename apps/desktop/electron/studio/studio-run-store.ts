@@ -90,10 +90,34 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
   ) {
     throw new Error(`Invalid ${at}.deliveryRequirement`);
   }
+  if (
+    value.deliveryRequirement === "local" &&
+    (value.pullRequestUrl !== undefined ||
+      value.checkpointSha !== undefined ||
+      (Array.isArray(value.githubCheckpoints) && value.githubCheckpoints.length > 0))
+  ) {
+    throw new Error(
+      `Contradictory milestone delivery requirement: local milestone cannot have GitHub checkpoints or PR URL`,
+    );
+  }
   const githubCheckpoints =
     value.githubCheckpoints === undefined
       ? undefined
       : decodeGitHubCheckpoints(value.githubCheckpoints, `${at}.githubCheckpoints`);
+  // Explicit legacy-handling rule:
+  // Existing saved runs created before deliveryRequirement was recorded may omit it.
+  // Legacy milestones carrying PR URLs, checkpoints, or legacy awaiting-review status
+  // are migrated to "github-pr". Other legacy milestones preserve their omitted state,
+  // which the scheduler ensures will not bypass merge verification in the autonomous workflow.
+  const resolvedDeliveryRequirement =
+    value.deliveryRequirement !== undefined
+      ? (value.deliveryRequirement as "github-pr" | "local")
+      : value.pullRequestUrl !== undefined ||
+          (githubCheckpoints && githubCheckpoints.length > 0) ||
+          value.status === "awaiting-review" ||
+          value.checkpointSha !== undefined
+        ? "github-pr"
+        : undefined;
   return {
     id: text(value.id, `${at}.id`),
     title: text(value.title, `${at}.title`),
@@ -112,8 +136,8 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
       ? { pullRequestUrl: value.pullRequestUrl as string }
       : {}),
     ...(githubCheckpoints ? { githubCheckpoints } : {}),
-    ...(value.deliveryRequirement
-      ? { deliveryRequirement: value.deliveryRequirement as "github-pr" | "local" }
+    ...(resolvedDeliveryRequirement
+      ? { deliveryRequirement: resolvedDeliveryRequirement }
       : {}),
     updatedAt: text(value.updatedAt, `${at}.updatedAt`),
   };
