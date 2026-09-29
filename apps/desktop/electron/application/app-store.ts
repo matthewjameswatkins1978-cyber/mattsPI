@@ -80,6 +80,7 @@ import {
   transitionStudioMilestone,
   transitionStudioRun,
 } from "../../contracts/studio-runs";
+import { assertNewStudioMilestoneCompletionsHaveEvidence } from "../studio/studio-verification-gate";
 import {
   applyTimelineEvent,
   appendAssistantDelta,
@@ -1315,6 +1316,7 @@ export class DesktopAppStore {
         throw new Error("Studio milestone status changes must follow the run lifecycle.");
       }
     }
+    assertNewStudioMilestoneCompletionsHaveEvidence(current, run, this.state.orchestrationChildren);
     const runs = current
       ? this.state.studioRuns.map((entry) => (entry.id === run.id ? run : entry))
       : [...this.state.studioRuns, run];
