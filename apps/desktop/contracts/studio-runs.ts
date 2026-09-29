@@ -531,29 +531,37 @@ export function preserveStudioRunHistory(
         throw new Error("GitHub review evidence requires its authorised confirmation path.");
       }
     }
+    const latestNewCheckpoint = newCheckpoints.at(-1);
+    const expectedCheckpointSha = latestNewCheckpoint?.headSha ?? previous.checkpointSha;
+    const expectedPullRequestUrl = latestNewCheckpoint?.pullRequestUrl ?? previous.pullRequestUrl;
     if (
       milestone.checkpointSha !== undefined &&
-      milestone.checkpointSha !== previous.checkpointSha
+      expectedCheckpointSha !== undefined &&
+      milestone.checkpointSha.toLowerCase() !== expectedCheckpointSha.toLowerCase()
     ) {
       throw new Error("Existing GitHub checkpoint identity is immutable.");
     }
     if (
       milestone.pullRequestUrl !== undefined &&
-      milestone.pullRequestUrl !== previous.pullRequestUrl
+      expectedPullRequestUrl !== undefined &&
+      milestone.pullRequestUrl.replace(/\/$/, "").toLowerCase() !==
+        expectedPullRequestUrl.replace(/\/$/, "").toLowerCase()
     ) {
       throw new Error("Existing GitHub checkpoint identity is immutable.");
     }
+    const resolvedCheckpoints =
+      newCheckpoints.length > 0
+        ? newCheckpoints
+        : (milestone.githubCheckpoints ?? previous.githubCheckpoints);
+    const resolvedLatest = resolvedCheckpoints?.at(-1);
+    const resolvedSha = resolvedLatest?.headSha ?? milestone.checkpointSha ?? previous.checkpointSha;
+    const resolvedUrl =
+      resolvedLatest?.pullRequestUrl ?? milestone.pullRequestUrl ?? previous.pullRequestUrl;
     return {
       ...milestone,
-      ...((milestone.githubCheckpoints ?? previous.githubCheckpoints)
-        ? { githubCheckpoints: milestone.githubCheckpoints ?? previous.githubCheckpoints }
-        : {}),
-      ...((milestone.checkpointSha ?? previous.checkpointSha)
-        ? { checkpointSha: milestone.checkpointSha ?? previous.checkpointSha }
-        : {}),
-      ...((milestone.pullRequestUrl ?? previous.pullRequestUrl)
-        ? { pullRequestUrl: milestone.pullRequestUrl ?? previous.pullRequestUrl }
-        : {}),
+      ...(resolvedCheckpoints ? { githubCheckpoints: resolvedCheckpoints } : {}),
+      ...(resolvedSha ? { checkpointSha: resolvedSha } : {}),
+      ...(resolvedUrl ? { pullRequestUrl: resolvedUrl } : {}),
     };
   });
   return { ...next, milestones };
@@ -622,15 +630,34 @@ export interface StudioRunsFile {
   readonly runs: readonly StudioRun[];
 }
 
+export function isStudioMilestoneDependencySatisfied(milestone: StudioMilestone): boolean {
+  if (milestone.status !== "complete") return false;
+  const latestCheckpoint = milestone.githubCheckpoints?.at(-1);
+  if (latestCheckpoint) {
+    return latestCheckpoint.reviewHistory.some(
+      ({ decision, source, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) =>
+        decision === "merged" &&
+        source === "github-api" &&
+        reviewedHeadSha.toLowerCase() === latestCheckpoint.headSha.toLowerCase() &&
+        Boolean(observedAt && mergeCommitSha && mergedAt),
+    );
+  }
+  if (milestone.pullRequestUrl) {
+    return false;
+  }
+  return true;
+}
+
 export function availableStudioMilestones(run: StudioRun): readonly StudioMilestone[] {
   if (run.status !== "running") return [];
-  const complete = new Set(
-    run.milestones.filter((milestone) => milestone.status === "complete").map(({ id }) => id),
-  );
+  const milestonesById = new Map(run.milestones.map((milestone) => [milestone.id, milestone] as const));
   return run.milestones.filter(
     (milestone) =>
       milestone.status === "queued" &&
-      milestone.dependsOn.every((dependency) => complete.has(dependency)),
+      milestone.dependsOn.every((dependencyId) => {
+        const dependency = milestonesById.get(dependencyId);
+        return dependency !== undefined && isStudioMilestoneDependencySatisfied(dependency);
+      }),
   );
 }
 

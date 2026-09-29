@@ -367,6 +367,79 @@ test.describe("Studio run plan state", () => {
     expect(availableStudioMilestones(completed).map(({ id }) => id)).toEqual(["m2"]);
   });
 
+  test("gates dependent milestones on PR merge while allowing unaffected work during Lucy review", () => {
+    const baseSha = "a".repeat(40);
+    const headSha = "b".repeat(40);
+    const mergeSha = "c".repeat(40);
+    const runWithIndependent: StudioRun = {
+      ...run,
+      milestones: [
+        run.milestones[0]!,
+        run.milestones[1]!,
+        {
+          id: "m3",
+          title: "Independent tooling",
+          instruction: "Setup independent fixtures",
+          dependsOn: [],
+          status: "queued",
+          workerThreadIds: [],
+          worktreeIds: [],
+          updatedAt: "2026-09-28T00:00:00.000Z",
+        },
+      ],
+    };
+
+    // m1 complete locally with no PR: m2 and m3 both available
+    const m1Complete = transitionStudioMilestone(
+      transitionStudioMilestone(
+        transitionStudioMilestone(runWithIndependent, "m1", "running"),
+        "m1",
+        "verifying",
+      ),
+      "m1",
+      "complete",
+    );
+    expect(availableStudioMilestones(m1Complete).map(({ id }) => id)).toEqual(["m2", "m3"]);
+
+    // m1 pushed to PR and awaiting Lucy: m2 is gated, but unaffected m3 remains available
+    const m1WithPr = recordStudioGitHubCheckpoint(m1Complete.milestones[0]!, {
+      repository: "owner/repo",
+      branch: "studio/m1",
+      pullRequestUrl: "https://github.com/owner/repo/pull/12",
+      baseSha,
+      headSha,
+      pushedAt: "2026-09-29T00:00:00.000Z",
+    });
+    const runAwaitingLucy: StudioRun = {
+      ...m1Complete,
+      milestones: [m1WithPr, m1Complete.milestones[1]!, m1Complete.milestones[2]!],
+      revision: m1Complete.revision + 1,
+    };
+    expect(preserveStudioRunHistory(m1Complete, runAwaitingLucy)).toBeTruthy();
+    expect(availableStudioMilestones(runAwaitingLucy).map(({ id }) => id)).toEqual(["m3"]);
+
+    // Observation: PR merged on GitHub -> dependent m2 becomes available alongside m3
+    const observation = {
+      repository: "owner/repo",
+      branch: "studio/m1",
+      pullRequestUrl: "https://github.com/owner/repo/pull/12",
+      baseSha,
+      headSha,
+      observedAt: "2026-09-29T00:10:00.000Z",
+      merged: true,
+      mergeCommitSha: mergeSha,
+      mergedAt: "2026-09-29T00:10:00.000Z",
+    };
+    const m1Merged = applyStudioGitHubPullRequestObservation(m1WithPr, observation);
+    const runMerged: StudioRun = {
+      ...runAwaitingLucy,
+      milestones: [m1Merged, runAwaitingLucy.milestones[1]!, runAwaitingLucy.milestones[2]!],
+      revision: runAwaitingLucy.revision + 1,
+    };
+    expect(preserveStudioRunHistory(runAwaitingLucy, runMerged, "github-observer")).toBeTruthy();
+    expect(availableStudioMilestones(runMerged).map(({ id }) => id)).toEqual(["m2", "m3"]);
+  });
+
   test("gates dispatch while paused and does not allow premature completion", () => {
     const paused = transitionStudioRun(run, "paused");
     expect(availableStudioMilestones(paused)).toEqual([]);
