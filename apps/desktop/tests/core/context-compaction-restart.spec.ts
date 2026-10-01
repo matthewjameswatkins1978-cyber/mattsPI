@@ -117,16 +117,29 @@ test("native Pi context compaction preserves a marker across app restart", async
     name: "native-compaction-marker-check",
     matches: (context) => true,
     respond: (context) => {
+      const text = allText(context);
+      // Pi's compaction summarization requests use SUMMARIZATION_SYSTEM_PROMPT
+      // ("You are a context summarization assistant..."); ordinary chat requests
+      // use the agent system prompt. Distinguish them before routing.
+      const isSummarization = text.includes("context summarization assistant");
       if (userText(context).includes(FOLLOW_UP)) {
-        followUpSawMarker = allText(context).includes(MARKER);
+        followUpSawMarker = text.includes(MARKER);
         return scriptedText(followUpSawMarker ? MARKER : "MISSING");
       }
-      if (userText(context).includes(WARM_UP)) return scriptedText("SESSION-READY");
-      compactionSummarySawMarker = allText(context).includes(MARKER);
-      if (!compactionSummarySawMarker) {
-        throw new Error("Pi did not provide the preserved marker to its compaction summary call.");
+      if (isSummarization) {
+        // A split-turn compaction issues TWO summarization requests: the
+        // retained-history summary (which carries the seeded marker) and a
+        // turn-prefix summary of only the in-flight turn (legitimately
+        // marker-free). Require the marker on the history summary; answer the
+        // turn-prefix summary benignly instead of failing the whole compaction.
+        if (text.includes(MARKER)) {
+          compactionSummarySawMarker = true;
+          return scriptedText(`Compacted history. Preserve reference token ${MARKER}.`);
+        }
+        return scriptedText("Turn prefix summary: local runtime warm-up exchange only.");
       }
-      return scriptedText(`Compacted history. Preserve reference token ${MARKER}.`);
+      if (userText(context).includes(WARM_UP)) return scriptedText("SESSION-READY");
+      return scriptedText("SESSION-READY");
     },
   };
   const server = await startScriptedOpenAiServer([actor], { includeUsage: true });
@@ -217,7 +230,9 @@ test("native Pi context compaction preserves a marker across app restart", async
       )
       .toBe(true);
     expect(compactionSummarySawMarker).toBe(true);
-    expect(server.requestLog()).toHaveLength(2);
+    // Split-turn compaction protocol: warm-up chat + retained-history summary +
+    // turn-prefix summary. Asserted explicitly (not "2") to match reality.
+    expect(server.requestLog()).toHaveLength(3);
 
     await harness.close();
     harness = await launch();
@@ -242,7 +257,8 @@ test("native Pi context compaction preserves a marker across app restart", async
       window.locator(".timeline-item--assistant .message__content").last(),
     ).toContainText(MARKER, { timeout: 30_000 });
     expect(followUpSawMarker).toBe(true);
-    expect(server.requestLog()).toHaveLength(3);
+    // +1 for the post-restart follow-up chat request.
+    expect(server.requestLog()).toHaveLength(4);
     console.log(
       JSON.stringify({
         provider: "local-scripted-fixture",
