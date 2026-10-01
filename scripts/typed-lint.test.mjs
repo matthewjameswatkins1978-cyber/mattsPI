@@ -170,7 +170,8 @@ test("a new workspace cannot silently receive only syntax lint", async () => {
   );
   assert.match(
     (await workspaceLintFailures(fixture)).join("\n"),
-    /packages\/new-feature: add a typed project/,
+    // path.relative prints platform separators; accept both on Windows.
+    /packages[\\/]new-feature: add a typed project/,
   );
   // A concrete typed project registration restores the intended path.
   const registered = lintFixture();

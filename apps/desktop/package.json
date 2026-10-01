@@ -38,6 +38,8 @@
     "test:dev:reload": "cross-env PI_APP_DEV_RELOAD_MARKERS=1 PI_APP_OPEN_DEVTOOLS=0 pnpm --dir ../.. exec playwright test -c apps/desktop/playwright.config.ts apps/desktop/tests/dev/dev-reload.spec.ts",
     "demo:product-media": "pnpm run build && pnpm --dir ../.. exec playwright test -c apps/desktop/scripts/product-media/playwright.config.ts",
     "demo:showcase-captures": "pnpm run build && jiti scripts/capture-showcase.mts",
+    "demo:studio-three-milestone-runtime": "pnpm run build && cross-env PI_APP_TEST_MODE=background pnpm --dir ../.. exec playwright test -c apps/desktop/tests/demo/playwright.demo.config.ts apps/desktop/tests/demo/studio-three-milestone-runtime.spec.ts",
+    "demo:studio-real-model-job": "node scripts/require-live-auth.mjs && pnpm run build && cross-env PI_APP_TEST_MODE=background pnpm --dir ../.. exec playwright test -c apps/desktop/tests/demo/playwright.demo.config.ts apps/desktop/tests/demo/studio-single-milestone-real-model.spec.ts",
     "test:core:navigation": "pnpm build && cross-env PI_APP_TEST_LANE=core PI_APP_REAL_AUTH=0 PI_APP_TEST_MODE=background pnpm --dir ../.. exec playwright test -c apps/desktop/playwright.config.ts apps/desktop/tests/core/navigation.spec.ts",
     "test:core:archive": "pnpm build && cross-env PI_APP_TEST_LANE=core PI_APP_REAL_AUTH=0 PI_APP_TEST_MODE=background pnpm --dir ../.. exec playwright test -c apps/desktop/playwright.config.ts apps/desktop/tests/core/archive.spec.ts",
     "test:core:new-thread-auto-title": "pnpm build && cross-env PI_APP_TEST_LANE=core PI_APP_REAL_AUTH=0 PI_APP_TEST_MODE=background pnpm --dir ../.. exec playwright test -c apps/desktop/playwright.config.ts apps/desktop/tests/core/new-thread-auto-title.spec.ts",

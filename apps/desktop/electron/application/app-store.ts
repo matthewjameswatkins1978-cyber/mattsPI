@@ -84,6 +84,10 @@ import {
   transitionStudioMilestone,
   transitionStudioRun,
 } from "../../contracts/studio-runs";
+import {
+  assertStudioCompletionWithReconciliation,
+  resolveStudioEvidenceWaitMs,
+} from "../studio/studio-gate-reconciliation";
 import { assertNewStudioMilestoneCompletionsHaveEvidence } from "../studio/studio-verification-gate";
 import {
   applyTimelineEvent,
@@ -1220,9 +1224,9 @@ export class DesktopAppStore {
     return this.orchestrationOwner.listThreadsToolResult(parentRef);
   }
 
-  async readThreadToolResult(parentRef: SessionRef, threadId: string) {
+  async readThreadToolResult(parentRef: SessionRef, threadId: string, full?: boolean) {
     await this.initialize();
-    return this.orchestrationOwner.readThreadToolResult(parentRef, threadId);
+    return this.orchestrationOwner.readThreadToolResult(parentRef, threadId, full);
   }
 
   async sendMessageToThreadToolResult(
@@ -1376,18 +1380,34 @@ export class DesktopAppStore {
       // The completion gate requires a trusted parent-transcript observation of
       // read_thread. Reload the coordinator transcript from the driver first so
       // the immediately preceding successful tool result cannot be hidden by a
-      // stale in-memory transcript cache.
+      // stale in-memory transcript cache. (PR#9 264fc29)
       await this.reloadTranscriptFromDriver({
         workspaceId: run.workspaceId,
         sessionId: run.coordinatorSessionId,
       });
     }
-    // Child evidence is derived from live transcripts. Re-project it here so the
-    // gate never consults a stale projection after the coordinator transcript is
-    // refreshed and concurrent child-session events have settled.
-    const projectedChildren = this.orchestrationOwner.projectOrchestrationChildren();
-    this.state = { ...this.state, orchestrationChildren: projectedChildren };
-    assertNewStudioMilestoneCompletionsHaveEvidence(current, run, projectedChildren);
+    // Child evidence is derived from live transcripts, and a concurrent child
+    // session's event stream can delay the coordinator's own read_thread result
+    // reaching the projection by tens of seconds. Instead of making the model
+    // re-save until the pipeline catches up (each retry costs an inference turn
+    // and re-injects the whole run into context), the host waits a bounded time
+    // for the derivation to settle. Verification requirements are unchanged:
+    // the gate still rejects when the evidence never arrives. (PR#8 36742e4)
+    const { waits } = await assertStudioCompletionWithReconciliation(
+      () => {
+        const projectedChildren = this.orchestrationOwner.projectOrchestrationChildren();
+        this.state = { ...this.state, orchestrationChildren: projectedChildren };
+        assertNewStudioMilestoneCompletionsHaveEvidence(current, run, projectedChildren);
+      },
+      { waitMs: resolveStudioEvidenceWaitMs(process.env.PI_APP_STUDIO_EVIDENCE_WAIT_MS) },
+    );
+    if (waits > 0) {
+      // Another save may have landed while the host waited; never clobber it.
+      const refreshed = this.state.studioRuns.find(({ id }) => id === run.id);
+      if (refreshed && refreshed.revision !== (current?.revision ?? 0)) {
+        throw new Error("Studio run changed elsewhere; reload its current state before saving.");
+      }
+    }
     const runs = current
       ? this.state.studioRuns.map((entry) => (entry.id === run.id ? run : entry))
       : [...this.state.studioRuns, run];
