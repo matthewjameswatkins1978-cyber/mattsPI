@@ -91,6 +91,7 @@ export interface ReadThreadToolDetails {
   readonly status?: string;
   readonly childThreadId?: string;
   readonly goal?: string;
+  readonly full?: boolean;
   readonly messages?: readonly OrchestrationThreadTranscriptMessage[];
   readonly error?: string;
 }
@@ -143,6 +144,7 @@ export interface OrchestrationRuntimeBridge {
   readonly readThread: (
     ctx: ExtensionContext,
     threadId: string,
+    full?: boolean,
   ) => Promise<AgentToolResult<ReadThreadToolDetails>>;
   readonly sendMessageToThread: (
     ctx: ExtensionContext,
@@ -262,11 +264,14 @@ function createReadThreadTool(
   return {
     name: readThreadToolName,
     label: "Read thread",
-    description: "Read a pi-gui thread transcript or child thread summary by id.",
-    promptSnippet: "read_thread: read a pi-gui thread transcript by id.",
+    description:
+      "Read a pi-gui thread by id. Returns a compact receipt (status, message counts, latest messages); the host keeps the full transcript and evidence. Pass full=true only when the receipt is not enough.",
+    promptSnippet:
+      "read_thread: compact receipt for a pi-gui thread; full=true returns the bounded complete transcript on demand.",
     promptGuidelines: [
       "Use read_thread with a thread id returned by list_threads or create_child_thread.",
       "Prefer reading a child thread before summarizing its status back to the parent.",
+      "The default receipt keeps context small; request full=true only when you must judge details the receipt omits.",
     ],
     parameters: {
       type: "object",
@@ -274,6 +279,11 @@ function createReadThreadTool(
         thread_id: {
           type: "string",
           description: "Thread id, child thread id, or session id to read.",
+        },
+        full: {
+          type: "boolean",
+          description:
+            "Return the complete bounded transcript instead of the compact receipt. Defaults to false.",
         },
       },
       required: ["thread_id"],
@@ -290,7 +300,8 @@ function createReadThreadTool(
           },
         };
       }
-      return bridge.readThread(ctx, threadId);
+      const full = isRecord(params) && params.full === true;
+      return bridge.readThread(ctx, threadId, full);
     },
   };
 }
@@ -349,12 +360,13 @@ function createWaitForChildThreadsTool(
     name: waitForChildThreadsToolName,
     label: "Wait for child threads",
     description:
-      "Wait up to 60 seconds for one or more delegated child threads to finish or fail, then continue coordinating.",
+      "Wait up to 10 minutes for one or more delegated child threads to finish or fail, then continue coordinating. Waiting happens in the host and consumes no model turns; prefer one long wait over repeated short ones.",
     promptSnippet:
-      "wait_for_child_threads: wait for child completion before inspecting and accepting results.",
+      "wait_for_child_threads: host-side wait for child completion before inspecting and accepting results.",
     promptGuidelines: [
       "Use wait_for_child_threads after dispatching child work; inspect finished work with read_thread.",
       "A timeout is a status update, not evidence of completion. Wait again or handle a stalled worker.",
+      "An idle coordinator should cost nothing: wait with a generous timeout instead of re-checking in a loop.",
     ],
     parameters: {
       type: "object",
@@ -366,7 +378,7 @@ function createWaitForChildThreadsTool(
         },
         timeout_ms: {
           type: "number",
-          description: "Maximum wait for this call, from 1 to 60000 milliseconds.",
+          description: "Maximum wait for this call, from 1 to 600000 milliseconds.",
         },
       },
       required: ["thread_ids"],
@@ -377,8 +389,8 @@ function createWaitForChildThreadsTool(
         throw new Error("wait_for_child_threads requires at least one thread_id.");
       }
       const timeoutMs = numberParam(params, "timeout_ms") ?? 60_000;
-      if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
-        throw new Error("timeout_ms must be an integer between 1 and 60000.");
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600_000) {
+        throw new Error("timeout_ms must be an integer between 1 and 600000.");
       }
       return bridge.waitForChildThreads(ctx, {
         threadIds,
@@ -657,6 +669,11 @@ export function readThreadIdFromToolOutput(output: unknown): string | undefined 
     return undefined;
   }
   return threadIdFromParams(details);
+}
+
+export function readThreadFullFromToolOutput(output: unknown): boolean {
+  const details = toolOutputDetails(output);
+  return details?.action === readThreadAction && details.full === true;
 }
 
 export function sendMessageToThreadFromToolOutput(
