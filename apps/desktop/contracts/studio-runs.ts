@@ -602,11 +602,20 @@ export function preserveStudioRunHistory(
     const latestNewCheckpoint = newCheckpoints.at(-1);
     const expectedCheckpointSha = latestNewCheckpoint?.headSha ?? previous.checkpointSha;
     const expectedPullRequestUrl = latestNewCheckpoint?.pullRequestUrl ?? previous.pullRequestUrl;
+    // Legacy ledgers carry only checkpointSha/pullRequestUrl (no githubCheckpoints
+    // array). Treat omission as a rewrite too, otherwise a model save can erase
+    // legacy history (PR#1 db05974 "preserve legacy checkpoint identity").
+    if (previous.checkpointSha !== undefined && milestone.checkpointSha === undefined) {
+      throw new Error("Existing GitHub checkpoint identity is immutable.");
+    }
     if (
       milestone.checkpointSha !== undefined &&
       expectedCheckpointSha !== undefined &&
       milestone.checkpointSha.toLowerCase() !== expectedCheckpointSha.toLowerCase()
     ) {
+      throw new Error("Existing GitHub checkpoint identity is immutable.");
+    }
+    if (previous.pullRequestUrl !== undefined && milestone.pullRequestUrl === undefined) {
       throw new Error("Existing GitHub checkpoint identity is immutable.");
     }
     if (
