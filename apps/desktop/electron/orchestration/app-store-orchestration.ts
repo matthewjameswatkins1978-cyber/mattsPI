@@ -37,6 +37,7 @@ import {
   listThreadsRequestedFromToolOutput,
   listThreadsToolName,
   readThreadAction,
+  readThreadFullFromToolOutput,
   readThreadIdFromToolOutput,
   readThreadToolName,
   sendMessageToThreadAction,
@@ -57,6 +58,13 @@ import type {
 const CHILD_TITLE_LIMIT = 56;
 const MAX_CHILD_TRANSCRIPT_MESSAGES = 40;
 const MAX_READ_THREAD_MESSAGES = 60;
+// Compact read receipts keep prior worker output out of the coordinator's
+// context (idea: bounded model-visible output with full detail retained
+// host-side, as in earendil-works/pi's subagent example and the
+// tintinweb/pi-subagents notification preview). Full reads stay bounded too.
+const READ_RECEIPT_TAIL_MESSAGES = 5;
+const READ_RECEIPT_MESSAGE_CHARS = 240;
+const READ_FULL_RESULT_CHAR_BUDGET = 50_000;
 const MAX_EVIDENCE_RECORDS_PER_CHILD = 80;
 const DEFAULT_SUPERVISION_INTERVAL_MS = 60_000;
 const MIN_SUPERVISION_INTERVAL_MS = 250;
@@ -155,6 +163,7 @@ export interface OrchestrationOwner {
   readThreadToolResult(
     parentRef: SessionRef,
     threadId: string,
+    full?: boolean,
   ): Promise<AgentToolResult<ReadThreadToolDetails>>;
   sendMessageToThreadToolResult(
     parentRef: SessionRef,
@@ -190,7 +199,8 @@ export function createOrchestrationOwner(store: OrchestrationOwnerHost): Orchest
     createChildThreadToolResult: (parentRef, input) =>
       createChildThreadToolResult(store, parentRef, input),
     listThreadsToolResult: (parentRef) => listThreadsToolResult(store, parentRef),
-    readThreadToolResult: (parentRef, threadId) => readThreadToolResult(store, parentRef, threadId),
+    readThreadToolResult: (parentRef, threadId, full) =>
+      readThreadToolResult(store, parentRef, threadId, full),
     sendMessageToThreadToolResult: (parentRef, input) =>
       sendMessageToThreadToolResult(store, parentRef, input),
     waitForChildThreadsToolResult: (parentRef, input) =>
@@ -715,7 +725,14 @@ async function updateReadThreadToolOutput(
   updateThreadToolOutput(
     store,
     event,
-    projectionFromToolResult(await readThreadToolResult(store, event.sessionRef, threadId)),
+    projectionFromToolResult(
+      await readThreadToolResult(
+        store,
+        event.sessionRef,
+        threadId,
+        readThreadFullFromToolOutput(event.output),
+      ),
+    ),
   );
 }
 
@@ -771,6 +788,7 @@ async function readThreadToolResult(
   store: OrchestrationOwnerHost,
   parentRef: SessionRef,
   threadId: string,
+  full?: boolean,
 ): Promise<AgentToolResult<ReadThreadToolDetails>> {
   const target = resolveThreadTarget(store, parentRef, threadId);
   if (!target) {
@@ -790,6 +808,7 @@ async function readThreadToolResult(
     sessionId: target.sessionRef.sessionId,
     title,
     status,
+    ...(full ? { full: true } : {}),
     ...(target.child
       ? {
           childThreadId: target.child.id,
@@ -800,9 +819,7 @@ async function readThreadToolResult(
   };
 
   return {
-    content: [
-      { type: "text", text: formatThreadReadResult({ ...details, title, status, messages }) },
-    ],
+    content: [{ type: "text", text: formatThreadReadResult(details) }],
     details,
   };
 }
@@ -1922,23 +1939,59 @@ function formatThreadList(threads: readonly ThreadListEntry[]): string {
 
 function formatThreadReadResult(result: {
   readonly threadId: string;
-  readonly title: string;
-  readonly status: string;
+  readonly title?: string;
+  readonly status?: string;
   readonly goal?: string;
-  readonly messages: readonly OrchestrationChildTranscriptMessage[];
+  readonly full?: boolean;
+  readonly messages?: readonly OrchestrationChildTranscriptMessage[];
 }): string {
+  const messages = result.messages ?? [];
   const lines = [
-    `Thread ${result.threadId}: ${result.title}`,
-    `Status: ${result.status}`,
+    `Thread ${result.threadId}: ${result.title ?? result.threadId}`,
+    `Status: ${result.status ?? "unknown"}`,
     ...(result.goal ? [`Goal: ${result.goal}`] : []),
-    "Transcript:",
   ];
-  if (result.messages.length === 0) {
-    lines.push("- No transcript messages loaded.");
-  } else {
-    lines.push(...result.messages.map((message) => `- ${message.role}: ${message.text}`));
+  if (messages.length === 0) {
+    lines.push("Messages: 0", "Transcript:", "- No transcript messages loaded.");
+    return lines.join("\n");
+  }
+  if (result.full) {
+    lines.push(`Messages: ${messages.length}`, "Transcript:");
+    let budget = READ_FULL_RESULT_CHAR_BUDGET;
+    let included = 0;
+    for (const message of messages) {
+      const line = `- ${message.role}: ${message.text}`;
+      if (line.length + 1 > budget) {
+        lines.push(
+          `- … transcript truncated after ${included} of ${messages.length} messages (bounded read budget exhausted).`,
+        );
+        break;
+      }
+      lines.push(line);
+      budget -= line.length + 1;
+      included += 1;
+    }
+    return lines.join("\n");
+  }
+  const tail = messages.slice(-READ_RECEIPT_TAIL_MESSAGES);
+  lines.push(
+    `Messages: ${messages.length} (receipt shows the last ${tail.length})`,
+    "Receipt:",
+    ...tail.map((message) => `- ${message.role}: ${truncateForReadReceipt(message.text)}`),
+  );
+  if (messages.length > tail.length) {
+    lines.push(
+      `${messages.length - tail.length} earlier messages are retained host-side; call read_thread with full=true for the complete bounded transcript.`,
+    );
   }
   return lines.join("\n");
+}
+
+function truncateForReadReceipt(text: string): string {
+  const flat = text.trim().replaceAll(/\s*\n\s*/g, " ");
+  return flat.length > READ_RECEIPT_MESSAGE_CHARS
+    ? `${flat.slice(0, READ_RECEIPT_MESSAGE_CHARS - 1)}…`
+    : flat;
 }
 
 function formatCreateChildThreadResult(result: CreateChildThreadToolDetails): string {

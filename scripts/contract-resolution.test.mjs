@@ -16,6 +16,9 @@ test("SDK driver implements canonical SessionDriver and cannot omit tree operati
   const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, directory);
   assert.deepEqual(parsed.errors, []);
   const file = path.join(directory, "src/contract-proof.ts");
+  // TypeScript normalizes program file names to forward slashes; compare the
+  // same way so the in-memory source also resolves on Windows.
+  const toPosix = (value) => value.replaceAll("\\", "/");
   const text = `
 import type { SessionDriver } from "@pi-gui/session-driver";
 import type { PiSdkDriver } from "./pi-sdk-driver.js";
@@ -28,7 +31,7 @@ const rejected: SessionDriver = incomplete;
   const host = ts.createCompilerHost(options);
   const getSourceFile = host.getSourceFile.bind(host);
   host.getSourceFile = (name, languageVersion, onError, shouldCreateNewSourceFile) =>
-    name === file
+    toPosix(name) === toPosix(file)
       ? ts.createSourceFile(file, text, languageVersion, true)
       : getSourceFile(name, languageVersion, onError, shouldCreateNewSourceFile);
   const program = ts.createProgram([...parsed.fileNames, file], options, host);
@@ -37,7 +40,7 @@ const rejected: SessionDriver = incomplete;
     ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
   );
   assert.equal(diagnostics.length, 1, rendered.join("\n"));
-  assert.equal(diagnostics[0].file?.fileName, file);
+  assert.equal(toPosix(diagnostics[0].file?.fileName ?? ""), toPosix(file));
   assert.match(rendered[0], /missing.*getSessionTree, navigateSessionTree/);
   const source = program.getSourceFile(file);
   const binding = source.statements[0].importClause.namedBindings.elements[0].name;
@@ -45,8 +48,8 @@ const rejected: SessionDriver = incomplete;
   const declaration = checker.getAliasedSymbol(checker.getSymbolAtLocation(binding))
     .declarations[0];
   assert.equal(
-    declaration.getSourceFile().fileName,
-    path.join(root, "packages/session-driver/dist/types.d.ts"),
+    toPosix(declaration.getSourceFile().fileName),
+    toPosix(path.join(root, "packages/session-driver/dist/types.d.ts")),
   );
 });
 
