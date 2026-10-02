@@ -67,6 +67,15 @@ export interface ReconcileStudioGitHubPullRequestInput {
 export type StudioExternalReviewStatus =
   "awaiting-lucy" | "changes-requested" | "accepted" | "merged" | "superseded";
 
+export type StudioMilestoneDeliveryRequirement = "github-pr" | "local";
+
+/**
+ * Host-owned run-level default for newly planned milestones. Only the authorised
+ * UI creation path may record "local"; model-facing saves never set or change it.
+ * Once persisted, the policy is immutable for the life of the run.
+ */
+export type StudioRunDeliveryPolicy = StudioMilestoneDeliveryRequirement;
+
 export interface StudioMilestone {
   readonly id: string;
   readonly title: string;
@@ -79,6 +88,8 @@ export interface StudioMilestone {
   readonly pullRequestUrl?: string;
   /** Append-only GitHub checkpoint history; legacy checkpoint fields remain readable. */
   readonly githubCheckpoints?: readonly StudioGitHubCheckpoint[];
+  /** When 'github-pr', local verification alone does not unlock dependent milestones; merge observation is required. */
+  readonly deliveryRequirement?: StudioMilestoneDeliveryRequirement;
   readonly updatedAt: string;
 }
 
@@ -91,6 +102,9 @@ export function recordStudioGitHubCheckpoint(
   milestone: StudioMilestone,
   input: Omit<StudioGitHubCheckpoint, "reviewHistory"> & { readonly now?: string },
 ): StudioMilestone {
+  if (milestone.deliveryRequirement === "local") {
+    throw new Error("Cannot record a GitHub checkpoint for a local-only milestone.");
+  }
   if (!validSha(input.baseSha) || !validSha(input.headSha)) {
     throw new Error("GitHub checkpoint requires full base and pushed HEAD SHAs.");
   }
@@ -143,15 +157,11 @@ export function recordStudioGitHubReview(
     .reverse()
     .find(({ source }) => source === "matthew-confirmed-lucy");
   if (latestTrusted?.decision === input.decision) return milestone;
-  if (
-    checkpoint.reviewHistory.some(
-      ({ decision, source }) => decision === "merged" && source === "github-api",
-    )
-  ) {
-    throw new Error(
-      "Lucy review cannot be recorded after GitHub confirms the pull request merged.",
-    );
-  }
+  // Recovery from out-of-order reality: GitHub may observe a merge before
+  // Lucy reviews the SHA. Recording that fact must never convert the merge
+  // into acceptance, and Lucy must still be able to accept (or request
+  // changes on) the exact SHA afterwards. Append-only; the merge observation
+  // is preserved untouched.
   checkpoints[index] = {
     ...checkpoint,
     reviewHistory: [
@@ -224,6 +234,47 @@ export function recordStudioGitHubMerge(
   };
 }
 
+function reviewTargetsCheckpoint(
+  reviewedHeadSha: string,
+  checkpointHeadSha: string,
+): boolean {
+  return reviewedHeadSha.toLowerCase() === checkpointHeadSha.toLowerCase();
+}
+
+/**
+ * Trusted Lucy ACCEPT for the exact checkpoint SHA. Never transfers across
+ * SHAs: a newer checkpoint invalidates prior acceptance for dependency
+ * purposes, and each checkpoint is judged only by reviews naming its SHA.
+ */
+export function hasTrustedLucyAcceptForCheckpoint(checkpoint: {
+  readonly headSha: string;
+  readonly reviewHistory: readonly StudioGitHubReview[];
+}): boolean {
+  return checkpoint.reviewHistory.some(
+    ({ decision, source, reviewedHeadSha }) =>
+      decision === "accepted" &&
+      source === "matthew-confirmed-lucy" &&
+      reviewTargetsCheckpoint(reviewedHeadSha, checkpoint.headSha),
+  );
+}
+
+/**
+ * Trusted GitHub merge observation for the exact checkpoint SHA, with valid
+ * merge evidence. Recording this fact never constitutes acceptance.
+ */
+export function hasTrustedGitHubMergeForCheckpoint(checkpoint: {
+  readonly headSha: string;
+  readonly reviewHistory: readonly StudioGitHubReview[];
+}): boolean {
+  return checkpoint.reviewHistory.some(
+    ({ decision, source, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) =>
+      decision === "merged" &&
+      source === "github-api" &&
+      reviewTargetsCheckpoint(reviewedHeadSha, checkpoint.headSha) &&
+      Boolean(observedAt && mergeCommitSha && mergedAt),
+  );
+}
+
 export function studioExternalReviewStatus(
   milestone: StudioMilestone,
   headSha: string,
@@ -236,22 +287,24 @@ export function studioExternalReviewStatus(
   if (index < 0) throw new Error("Unknown GitHub checkpoint SHA.");
   if (index !== checkpoints.length - 1) return "superseded";
   const checkpoint = checkpoints[index]!;
-  const mergeObservation = checkpoint.reviewHistory.find(
-    ({ decision, source, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) =>
-      decision === "merged" &&
-      source === "github-api" &&
-      reviewedHeadSha.toLowerCase() === checkpoint.headSha.toLowerCase() &&
-      Boolean(observedAt && mergeCommitSha && mergedAt),
-  );
-  if (mergeObservation) return "merged";
+  // A GitHub merge observation is code truth, never acceptance: a checkpoint
+  // whose merge was observed before Lucy reviewed it stays reviewable.
+  // "merged" requires BOTH trusted facts for the same exact SHA.
+  if (
+    hasTrustedGitHubMergeForCheckpoint(checkpoint) &&
+    hasTrustedLucyAcceptForCheckpoint(checkpoint)
+  ) {
+    return "merged";
+  }
   const review = [...checkpoint.reviewHistory]
     .reverse()
     .find(
-      ({ reviewedHeadSha }) => reviewedHeadSha.toLowerCase() === checkpoint.headSha.toLowerCase(),
+      ({ source, reviewedHeadSha }) =>
+        source === "matthew-confirmed-lucy" &&
+        reviewTargetsCheckpoint(reviewedHeadSha, checkpoint.headSha),
     );
-  if (review?.source !== "matthew-confirmed-lucy") return "awaiting-lucy";
-  if (review.decision === "merged") return "awaiting-lucy";
-  return review?.decision ?? "awaiting-lucy";
+  if (!review || review.decision === "merged") return "awaiting-lucy";
+  return review.decision;
 }
 
 /** Applies a trusted, read-only GitHub API observation to the append-only checkpoint history. */
@@ -333,6 +386,8 @@ export interface StudioRun {
   readonly specification: string;
   /** Session that received this run's /studio planning packet, when prepared from Studio. */
   readonly coordinatorSessionId?: string;
+  /** Host-owned default delivery requirement for milestones appended to this run. */
+  readonly deliveryPolicy?: StudioRunDeliveryPolicy;
   /** Increments when Matthew or Lucy changes the active objective. */
   readonly specificationRevision?: number;
   readonly corrections?: readonly StudioCorrection[];
@@ -362,10 +417,33 @@ export function preserveStudioRunHistory(
     ) {
       throw new Error("GitHub review evidence requires its authorised confirmation path.");
     }
+    for (const milestone of next.milestones) {
+      if (
+        milestone.deliveryRequirement !== "github-pr" &&
+        milestone.deliveryRequirement !== "local"
+      ) {
+        throw new Error(
+          `Every newly planned milestone must declare a delivery requirement ("github-pr" | "local"): milestone "${milestone.id}" is missing one.`,
+        );
+      }
+      if (
+        milestone.deliveryRequirement === "local" &&
+        (milestone.pullRequestUrl !== undefined ||
+          milestone.checkpointSha !== undefined ||
+          (milestone.githubCheckpoints?.length ?? 0) > 0)
+      ) {
+        throw new Error(
+          `Contradictory milestone delivery requirement: local milestone "${milestone.id}" cannot have GitHub checkpoints or PR URL.`,
+        );
+      }
+    }
     return next;
   }
   if (next.milestones.length < current.milestones.length) {
     throw new Error("Existing Studio milestones cannot be removed.");
+  }
+  if ((next.deliveryPolicy ?? "github-pr") !== (current.deliveryPolicy ?? "github-pr")) {
+    throw new Error("The Studio run delivery policy is host-owned and immutable.");
   }
   const previousCorrections = current.corrections ?? [];
   const nextCorrections = next.corrections ?? [];
@@ -440,6 +518,24 @@ export function preserveStudioRunHistory(
     const previous = current.milestones[index];
     if (!previous) {
       if (
+        milestone.deliveryRequirement !== "github-pr" &&
+        milestone.deliveryRequirement !== "local"
+      ) {
+        throw new Error(
+          `Every newly planned milestone must declare a delivery requirement ("github-pr" | "local"): milestone "${milestone.id}" is missing one.`,
+        );
+      }
+      if (
+        milestone.deliveryRequirement === "local" &&
+        (milestone.pullRequestUrl !== undefined ||
+          milestone.checkpointSha !== undefined ||
+          (milestone.githubCheckpoints?.length ?? 0) > 0)
+      ) {
+        throw new Error(
+          `Contradictory milestone delivery requirement: local milestone "${milestone.id}" cannot have GitHub checkpoints or PR URL.`,
+        );
+      }
+      if (
         (milestone.githubCheckpoints ?? []).some(({ reviewHistory }) => reviewHistory.length > 0)
       ) {
         throw new Error("GitHub review evidence requires its authorised confirmation path.");
@@ -450,9 +546,20 @@ export function preserveStudioRunHistory(
       milestone.id !== previous.id ||
       milestone.title !== previous.title ||
       milestone.instruction !== previous.instruction ||
-      JSON.stringify(milestone.dependsOn) !== JSON.stringify(previous.dependsOn)
+      JSON.stringify(milestone.dependsOn) !== JSON.stringify(previous.dependsOn) ||
+      milestone.deliveryRequirement !== previous.deliveryRequirement
     ) {
       throw new Error("Existing Studio milestone identities and dependencies are immutable.");
+    }
+    if (
+      milestone.deliveryRequirement === "local" &&
+      (milestone.pullRequestUrl !== undefined ||
+        milestone.checkpointSha !== undefined ||
+        (milestone.githubCheckpoints?.length ?? 0) > 0)
+    ) {
+      throw new Error(
+        `Contradictory milestone delivery requirement: local milestone "${milestone.id}" cannot have GitHub checkpoints or PR URL.`,
+      );
     }
     if (
       !isPrefix(previous.workerThreadIds, milestone.workerThreadIds) ||
@@ -531,24 +638,51 @@ export function preserveStudioRunHistory(
         throw new Error("GitHub review evidence requires its authorised confirmation path.");
       }
     }
-    // These two fields are the only checkpoint identity carried by older ledgers.
-    // Treat omission as a rewrite too; otherwise a model save can erase legacy history.
-    if (milestone.checkpointSha !== previous.checkpointSha) {
+    const latestNewCheckpoint = newCheckpoints.at(-1);
+    const expectedCheckpointSha = latestNewCheckpoint?.headSha ?? previous.checkpointSha;
+    const expectedPullRequestUrl = latestNewCheckpoint?.pullRequestUrl ?? previous.pullRequestUrl;
+    // Legacy ledgers carry only checkpointSha/pullRequestUrl (no githubCheckpoints
+    // array). Treat omission as a rewrite too, otherwise a model save can erase
+    // legacy history (PR#1 db05974 "preserve legacy checkpoint identity").
+    if (previous.checkpointSha !== undefined && milestone.checkpointSha === undefined) {
       throw new Error("Existing GitHub checkpoint identity is immutable.");
     }
-    if (milestone.pullRequestUrl !== previous.pullRequestUrl) {
+    if (
+      milestone.checkpointSha !== undefined &&
+      expectedCheckpointSha !== undefined &&
+      milestone.checkpointSha.toLowerCase() !== expectedCheckpointSha.toLowerCase()
+    ) {
       throw new Error("Existing GitHub checkpoint identity is immutable.");
     }
+    if (previous.pullRequestUrl !== undefined && milestone.pullRequestUrl === undefined) {
+      throw new Error("Existing GitHub checkpoint identity is immutable.");
+    }
+    if (
+      milestone.pullRequestUrl !== undefined &&
+      expectedPullRequestUrl !== undefined &&
+      milestone.pullRequestUrl.replace(/\/$/, "").toLowerCase() !==
+        expectedPullRequestUrl.replace(/\/$/, "").toLowerCase()
+    ) {
+      throw new Error("Existing GitHub checkpoint identity is immutable.");
+    }
+    const resolvedCheckpoints =
+      newCheckpoints.length > 0
+        ? newCheckpoints
+        : (milestone.githubCheckpoints ?? previous.githubCheckpoints);
+    const resolvedLatest = resolvedCheckpoints?.at(-1);
+    const resolvedSha =
+      resolvedLatest?.headSha ?? milestone.checkpointSha ?? previous.checkpointSha;
+    const resolvedUrl =
+      resolvedLatest?.pullRequestUrl ?? milestone.pullRequestUrl ?? previous.pullRequestUrl;
+    const resolvedDeliveryRequirement =
+      milestone.deliveryRequirement ?? previous.deliveryRequirement;
     return {
       ...milestone,
-      ...((milestone.githubCheckpoints ?? previous.githubCheckpoints)
-        ? { githubCheckpoints: milestone.githubCheckpoints ?? previous.githubCheckpoints }
-        : {}),
-      ...((milestone.checkpointSha ?? previous.checkpointSha)
-        ? { checkpointSha: milestone.checkpointSha ?? previous.checkpointSha }
-        : {}),
-      ...((milestone.pullRequestUrl ?? previous.pullRequestUrl)
-        ? { pullRequestUrl: milestone.pullRequestUrl ?? previous.pullRequestUrl }
+      ...(resolvedCheckpoints ? { githubCheckpoints: resolvedCheckpoints } : {}),
+      ...(resolvedSha ? { checkpointSha: resolvedSha } : {}),
+      ...(resolvedUrl ? { pullRequestUrl: resolvedUrl } : {}),
+      ...(resolvedDeliveryRequirement !== undefined
+        ? { deliveryRequirement: resolvedDeliveryRequirement }
         : {}),
     };
   });
@@ -618,15 +752,46 @@ export interface StudioRunsFile {
   readonly runs: readonly StudioRun[];
 }
 
+export function isStudioMilestoneDependencySatisfied(milestone: StudioMilestone): boolean {
+  if (milestone.status !== "complete") return false;
+  // A milestone with a PR URL or GitHub checkpoints must always require merge confirmation;
+  // it must never bypass merge verification even if deliveryRequirement says "local".
+  if (
+    Boolean(milestone.pullRequestUrl) ||
+    Boolean(milestone.githubCheckpoints && milestone.githubCheckpoints.length > 0)
+  ) {
+    const latestCheckpoint = milestone.githubCheckpoints?.at(-1);
+    if (!latestCheckpoint) return false;
+    // A GitHub-delivered milestone satisfies downstream dependencies only when
+    // BOTH trusted facts exist for the same latest checkpoint SHA: Lucy has
+    // explicitly accepted the exact SHA through the Matthew-confirmation path,
+    // AND GitHub has observed that exact SHA merged. Merge truth alone — e.g. a
+    // manually merged but never reviewed PR — never unlocks dependents.
+    return (
+      hasTrustedLucyAcceptForCheckpoint(latestCheckpoint) &&
+      hasTrustedGitHubMergeForCheckpoint(latestCheckpoint)
+    );
+  }
+  if (milestone.deliveryRequirement === "local") {
+    return true;
+  }
+  // For 'github-pr' or an omitted requirement in the autonomous GitHub delivery workflow,
+  // do not silently interpret a missing value as local-only: merge confirmation is required.
+  return false;
+}
+
 export function availableStudioMilestones(run: StudioRun): readonly StudioMilestone[] {
   if (run.status !== "running") return [];
-  const complete = new Set(
-    run.milestones.filter((milestone) => milestone.status === "complete").map(({ id }) => id),
+  const milestonesById = new Map(
+    run.milestones.map((milestone) => [milestone.id, milestone] as const),
   );
   return run.milestones.filter(
     (milestone) =>
       milestone.status === "queued" &&
-      milestone.dependsOn.every((dependency) => complete.has(dependency)),
+      milestone.dependsOn.every((dependencyId) => {
+        const dependency = milestonesById.get(dependencyId);
+        return dependency !== undefined && isStudioMilestoneDependencySatisfied(dependency);
+      }),
   );
 }
 
@@ -651,7 +816,11 @@ export function transitionStudioRun(
   }
   if (
     status === "completed" &&
-    run.milestones.some((milestone) => milestone.status !== "complete")
+    // Cancelled milestones are terminal (plan changes and stop both cancel work),
+    // so they do not keep a finished run from completing.
+    run.milestones.some(
+      (milestone) => milestone.status !== "complete" && milestone.status !== "cancelled",
+    )
   ) {
     throw new Error("A Studio run cannot complete while milestones remain unfinished.");
   }

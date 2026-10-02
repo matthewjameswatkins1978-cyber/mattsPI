@@ -84,6 +84,10 @@ import {
   transitionStudioMilestone,
   transitionStudioRun,
 } from "../../contracts/studio-runs";
+import {
+  assertStudioCompletionWithReconciliation,
+  resolveStudioEvidenceWaitMs,
+} from "../studio/studio-gate-reconciliation";
 import { assertNewStudioMilestoneCompletionsHaveEvidence } from "../studio/studio-verification-gate";
 import {
   applyTimelineEvent,
@@ -1220,9 +1224,9 @@ export class DesktopAppStore {
     return this.orchestrationOwner.listThreadsToolResult(parentRef);
   }
 
-  async readThreadToolResult(parentRef: SessionRef, threadId: string) {
+  async readThreadToolResult(parentRef: SessionRef, threadId: string, full?: boolean) {
     await this.initialize();
-    return this.orchestrationOwner.readThreadToolResult(parentRef, threadId);
+    return this.orchestrationOwner.readThreadToolResult(parentRef, threadId, full);
   }
 
   async sendMessageToThreadToolResult(
@@ -1251,8 +1255,43 @@ export class DesktopAppStore {
     return state;
   }
 
-  async saveStudioRun(inputRun: StudioRun): Promise<DesktopAppState> {
-    return this.persistStudioRun(inputRun, "none");
+  /**
+   * Persist a Studio run. `source` distinguishes the authorised renderer UI path
+   * ("ui") from the model-facing save_studio_run bridge ("model", default).
+   * Delivery policy and the coordinator binding are host-owned: only an explicit
+   * UI creation may choose a local-only demonstration policy, model saves can
+   * never introduce or change it, and both are preserved across later saves.
+   */
+  async saveStudioRun(
+    inputRun: StudioRun,
+    options: { readonly source?: "ui" | "model" } = {},
+  ): Promise<DesktopAppState> {
+    await this.initialize();
+    const current = this.state.studioRuns.find(({ id }) => id === inputRun.id);
+    const deliveryPolicy =
+      current?.deliveryPolicy ??
+      (options.source === "ui" && inputRun.deliveryPolicy === "local" ? "local" : "github-pr");
+    const milestones = inputRun.milestones.map((milestone) => {
+      const previous = current?.milestones.find(({ id }) => id === milestone.id);
+      return {
+        ...milestone,
+        // Delivery policy is host-owned. Preserve existing policy and make new
+        // milestones follow the run's authorised policy; absent one, they wait
+        // for observed GitHub merge evidence before dependants run.
+        deliveryRequirement: previous?.deliveryRequirement ?? deliveryPolicy,
+      };
+    });
+    return this.persistStudioRun(
+      {
+        ...inputRun,
+        ...(current?.coordinatorSessionId
+          ? { coordinatorSessionId: current.coordinatorSessionId }
+          : {}),
+        deliveryPolicy,
+        milestones,
+      },
+      "none",
+    );
   }
 
   async recordStudioCorrection(input: RecordStudioCorrectionInput): Promise<DesktopAppState> {
@@ -1332,7 +1371,28 @@ export class DesktopAppStore {
         throw new Error("Studio milestone status changes must follow the run lifecycle.");
       }
     }
-    assertNewStudioMilestoneCompletionsHaveEvidence(current, run, this.state.orchestrationChildren);
+    // Child evidence is derived from live transcripts, and a concurrent child
+    // session's event stream can delay the coordinator's own read_thread result
+    // reaching the projection by tens of seconds. Instead of making the model
+    // re-save until the pipeline catches up (each retry costs an inference turn
+    // and re-injects the whole run into context), the host waits a bounded time
+    // for the derivation to settle. Verification requirements are unchanged:
+    // the gate still rejects when the evidence never arrives.
+    const { waits } = await assertStudioCompletionWithReconciliation(
+      () => {
+        const projectedChildren = this.orchestrationOwner.projectOrchestrationChildren();
+        this.state = { ...this.state, orchestrationChildren: projectedChildren };
+        assertNewStudioMilestoneCompletionsHaveEvidence(current, run, projectedChildren);
+      },
+      { waitMs: resolveStudioEvidenceWaitMs(process.env.PI_APP_STUDIO_EVIDENCE_WAIT_MS) },
+    );
+    if (waits > 0) {
+      // Another save may have landed while the host waited; never clobber it.
+      const refreshed = this.state.studioRuns.find(({ id }) => id === run.id);
+      if (refreshed && refreshed.revision !== (current?.revision ?? 0)) {
+        throw new Error("Studio run changed elsewhere; reload its current state before saving.");
+      }
+    }
     const runs = current
       ? this.state.studioRuns.map((entry) => (entry.id === run.id ? run : entry))
       : [...this.state.studioRuns, run];

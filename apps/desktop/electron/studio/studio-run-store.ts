@@ -73,6 +73,7 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
       "checkpointSha",
       "pullRequestUrl",
       "githubCheckpoints",
+      "deliveryRequirement",
       "updatedAt",
     ],
     at,
@@ -82,10 +83,41 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
     !milestoneStatuses.includes(value.status as StudioMilestoneStatus)
   )
     throw new Error(`Invalid ${at}.status`);
+  if (
+    value.deliveryRequirement !== undefined &&
+    value.deliveryRequirement !== "github-pr" &&
+    value.deliveryRequirement !== "local"
+  ) {
+    throw new Error(`Invalid ${at}.deliveryRequirement`);
+  }
+  if (
+    value.deliveryRequirement === "local" &&
+    (value.pullRequestUrl !== undefined ||
+      value.checkpointSha !== undefined ||
+      (Array.isArray(value.githubCheckpoints) && value.githubCheckpoints.length > 0))
+  ) {
+    throw new Error(
+      `Contradictory milestone delivery requirement: local milestone cannot have GitHub checkpoints or PR URL`,
+    );
+  }
   const githubCheckpoints =
     value.githubCheckpoints === undefined
       ? undefined
       : decodeGitHubCheckpoints(value.githubCheckpoints, `${at}.githubCheckpoints`);
+  // Explicit legacy-handling rule:
+  // Existing saved runs created before deliveryRequirement was recorded may omit it.
+  // Legacy milestones carrying PR URLs, checkpoints, or legacy awaiting-review status
+  // are migrated to "github-pr". Other legacy milestones remain local-only so
+  // previously completed local work can continue to be read and resumed.
+  const resolvedDeliveryRequirement =
+    value.deliveryRequirement !== undefined
+      ? (value.deliveryRequirement as "github-pr" | "local")
+      : value.pullRequestUrl !== undefined ||
+          (githubCheckpoints && githubCheckpoints.length > 0) ||
+          value.status === "awaiting-review" ||
+          value.checkpointSha !== undefined
+        ? "github-pr"
+        : "local";
   return {
     id: text(value.id, `${at}.id`),
     title: text(value.title, `${at}.title`),
@@ -104,6 +136,7 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
       ? { pullRequestUrl: value.pullRequestUrl as string }
       : {}),
     ...(githubCheckpoints ? { githubCheckpoints } : {}),
+    ...(resolvedDeliveryRequirement ? { deliveryRequirement: resolvedDeliveryRequirement } : {}),
     updatedAt: text(value.updatedAt, `${at}.updatedAt`),
   };
 }
@@ -253,6 +286,7 @@ function decodeRun(value: unknown, at: string): StudioRun {
       "repositoryPath",
       "specification",
       "coordinatorSessionId",
+      "deliveryPolicy",
       "specificationRevision",
       "corrections",
       "mode",
@@ -267,6 +301,13 @@ function decodeRun(value: unknown, at: string): StudioRun {
   );
   if (value.mode !== "observed" && value.mode !== "autonomous")
     throw new Error(`Invalid ${at}.mode`);
+  if (
+    value.deliveryPolicy !== undefined &&
+    value.deliveryPolicy !== "github-pr" &&
+    value.deliveryPolicy !== "local"
+  ) {
+    throw new Error(`Invalid ${at}.deliveryPolicy`);
+  }
   if (!runStatuses.includes(value.status as StudioRunStatus))
     throw new Error(`Invalid ${at}.status`);
   if (!Array.isArray(value.milestones) || value.milestones.length > MAX_STUDIO_MILESTONES)
@@ -326,6 +367,9 @@ function decodeRun(value: unknown, at: string): StudioRun {
     specification: text(value.specification, `${at}.specification`),
     ...(optionalText(value.coordinatorSessionId, `${at}.coordinatorSessionId`)
       ? { coordinatorSessionId: value.coordinatorSessionId as string }
+      : {}),
+    ...(value.deliveryPolicy
+      ? { deliveryPolicy: value.deliveryPolicy as "github-pr" | "local" }
       : {}),
     specificationRevision: specificationRevision as number,
     corrections,

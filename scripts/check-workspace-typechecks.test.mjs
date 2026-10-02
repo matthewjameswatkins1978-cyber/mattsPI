@@ -21,7 +21,7 @@ test("pnpm discovery catches a new workspace without a typecheck command", () =>
     assert.equal(result.count, 1);
     assert.match(
       result.failures.join("\n"),
-      /modules\/new-workspace\/package.json: missing scripts.typecheck/,
+      /modules[\\/]new-workspace[\\/]package.json: missing scripts.typecheck/,
     );
   }
   writeFileSync(

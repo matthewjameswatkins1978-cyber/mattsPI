@@ -11,6 +11,42 @@ import {
 } from "../helpers/electron-app";
 import { sessionFilePathFromCatalog } from "../helpers/session-file";
 
+async function selectedTranscript(userDataDir: string, window: import("@playwright/test").Page) {
+  const state = await getDesktopState(window);
+  const workspace = state.workspaces.find(({ id }) => id === state.selectedWorkspaceId);
+  if (!workspace || !state.selectedSessionId) throw new Error("No selected Qwen test session");
+  const sessionPath = await sessionFilePathFromCatalog(userDataDir, {
+    workspaceId: workspace.id,
+    sessionId: state.selectedSessionId,
+  });
+  return readFile(sessionPath, "utf8");
+}
+
+function transcriptRoutes(transcript: string): string[] {
+  const entries = transcript
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as unknown);
+  return [
+    ...new Set(entries.map(assistantRoute).filter((route): route is string => route !== undefined)),
+  ];
+}
+
+function assistantRoute(entry: unknown): string | undefined {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
+  const message = (entry as Record<string, unknown>).message;
+  if (typeof message !== "object" || message === null || Array.isArray(message)) return undefined;
+  const record = message as Record<string, unknown>;
+  if (
+    record.role !== "assistant" ||
+    typeof record.provider !== "string" ||
+    typeof record.model !== "string"
+  ) {
+    return undefined;
+  }
+  return `${record.provider}/${record.model}`;
+}
+
 test("installed Pi GUI Try invokes bounded-context on Qwen Token Plan Max", async () => {
   test.skip(
     process.env.PI_APP_RUN_SKILL_LIVE !== "1",
@@ -41,9 +77,9 @@ test("installed Pi GUI Try invokes bounded-context on Qwen Token Plan Max", asyn
       {
         ...settings,
         defaultProvider: "qwen-token-plan",
-        defaultModel: "qwen3.8-max",
+        defaultModel: "qwen3.8-flash",
         defaultThinkingLevel: "medium",
-        enabledModels: ["qwen-token-plan/qwen3.8-max"],
+        enabledModels: ["qwen-token-plan/qwen3.8-flash", "qwen-token-plan/qwen3.8-max"],
       },
       null,
       2,
@@ -61,6 +97,32 @@ test("installed Pi GUI Try invokes bounded-context on Qwen Token Plan Max", asyn
     // Create a blank session through the GUI runtime, avoiding an unrelated
     // model call before Skills → Try has prepared the actual test request.
     await createNamedThread(window, "Bounded-context skill verification");
+    const composer = window.getByTestId("composer");
+
+    await composer.fill("Reply with exactly PI-READY.");
+    await window.getByRole("button", { name: "Send message", exact: true }).click();
+    const flashAssistant = window.locator(".timeline-item--assistant .message__content").last();
+    await expect(flashAssistant).toContainText(/\S/, { timeout: 180_000 });
+    const flashResponse = (await flashAssistant.innerText()).trim();
+    const flashTranscript = await selectedTranscript(userDataDir, window);
+    expect(transcriptRoutes(flashTranscript)).toEqual(["qwen-token-plan/qwen3.8-flash"]);
+    expect(flashTranscript).toContain("Reply with exactly PI-READY.");
+
+    const modelBadge = window.locator(".composer__bar .model-selector__badge").first();
+    await modelBadge.click();
+    const modelDropdown = window.locator(".composer__bar .model-selector__dropdown").first();
+    await expect(modelDropdown).toBeVisible();
+    await modelDropdown.getByRole("button", { name: /Qwen3\.8 Max/i }).click();
+    await composer.fill("Reply with exactly PI-MAX-READY.");
+    await window.getByRole("button", { name: "Send message", exact: true }).click();
+    const maxAssistant = window.locator(".timeline-item--assistant .message__content").last();
+    await expect(maxAssistant).toContainText(/PI-MAX-READY/, { timeout: 180_000 });
+    const maxResponse = (await maxAssistant.innerText()).trim();
+    const switchedTranscript = await selectedTranscript(userDataDir, window);
+    expect(transcriptRoutes(switchedTranscript)).toEqual([
+      "qwen-token-plan/qwen3.8-flash",
+      "qwen-token-plan/qwen3.8-max",
+    ]);
 
     await window.getByRole("button", { name: "Skills", exact: true }).click();
     await expect
@@ -73,7 +135,6 @@ test("installed Pi GUI Try invokes bounded-context on Qwen Token Plan Max", asyn
     await window.getByRole("button", { name: /Bounded Context/i }).click();
     await expect(window.locator(".skill-detail")).toContainText(command);
     await window.getByRole("button", { name: "Try", exact: true }).click();
-    const composer = window.getByTestId("composer");
     await expect(composer).toHaveValue(`${command} `);
 
     const request =
@@ -85,41 +146,20 @@ test("installed Pi GUI Try invokes bounded-context on Qwen Token Plan Max", asyn
     await expect(assistant).toContainText(/dependencies remain unchanged/i, { timeout: 180_000 });
     const response = await assistant.innerText();
 
-    const state = await getDesktopState(window);
-    const selectedWorkspace = state.workspaces.find(({ id }) => id === state.selectedWorkspaceId);
-    if (!selectedWorkspace || !state.selectedSessionId)
-      throw new Error("No selected skill-test session");
-    const sessionPath = await sessionFilePathFromCatalog(userDataDir, {
-      workspaceId: selectedWorkspace.id,
-      sessionId: state.selectedSessionId,
-    });
-    const transcript = await readFile(sessionPath, "utf8");
-    const entries = transcript
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-    const routes = [
-      ...new Set(
-        entries
-          .filter((entry) => entry.message?.role === "assistant")
-          .map((entry) =>
-            entry.message?.provider && entry.message.model
-              ? `${entry.message.provider}/${entry.message.model}`
-              : "",
-          )
-          .filter(Boolean),
-      ),
-    ];
-    expect(routes).toEqual(["qwen-token-plan/qwen3.8-max"]);
+    const transcript = await selectedTranscript(userDataDir, window);
+    const routes = transcriptRoutes(transcript);
+    expect(routes).toEqual(["qwen-token-plan/qwen3.8-flash", "qwen-token-plan/qwen3.8-max"]);
     expect(transcript).toContain(request);
     expect(transcript).toContain(instruction);
     expect(response).toMatch(
-      /cached or distilled results remain valid only while their dependencies remain unchanged/i,
+      /cached or distilled results (?:remain|are) valid only while their dependencies remain unchanged/i,
     );
     console.log(
       JSON.stringify({
         route: routes[0],
         tryInsertedCommand: command,
+        flashExactMarker: flashResponse === "PI-READY",
+        maxExactMarker: maxResponse === "PI-MAX-READY",
         transcriptContainsExactSkillInstruction: transcript.includes(instruction),
         responseMatchesLoadedRule: true,
         promptToResponseMs: Date.now() - startedAt,

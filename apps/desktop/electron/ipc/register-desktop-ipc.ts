@@ -647,7 +647,7 @@ export function registerDesktopIpc({
   ipcMain.handle(desktopIpc.saveStudioRun, (event, rawRun: unknown) =>
     run(event, () => {
       const checked = decodeStudioRunsFile({ version: 1, runs: [rawRun] });
-      return owners.studioRuns.saveStudioRun(checked.runs[0]!);
+      return owners.studioRuns.saveStudioRun(checked.runs[0]!, { source: "ui" });
     }),
   );
   ipcMain.handle(desktopIpc.recordStudioCorrection, (event, rawInput: unknown) =>

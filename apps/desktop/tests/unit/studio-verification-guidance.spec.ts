@@ -11,6 +11,8 @@ test("Studio coordinator instructions require independent evidence and bounded r
   ).find(({ name }) => name === saveStudioRunToolName);
   expect(saveTool).toBeDefined();
   const guidance = saveTool!.promptGuidelines.join(" ");
+  expect(JSON.stringify(saveTool!.parameters)).not.toContain("deliveryRequirement");
+  expect(guidance).toContain("application owns the delivery policy");
   expect(guidance).toContain("worker's completion message as a claim, not acceptance");
   expect(guidance).toContain("at most two Studio child workers active at once");
   expect(guidance).toContain("never silently switch to a metered route");
