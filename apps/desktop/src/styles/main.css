@@ -3402,6 +3402,37 @@ mark.thread-find-active {
   line-height: 1.7;
 }
 
+.studio-run__workers {
+  display: grid;
+  gap: 7px;
+  margin: 6px 0 10px;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.studio-run__worker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.studio-run__worker strong {
+  color: var(--text);
+}
+
+.studio-run__worker code {
+  overflow-wrap: anywhere;
+}
+
+.studio-run__worker-open {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 .studio-run__actions {
   justify-content: flex-start;
   flex-wrap: wrap;
