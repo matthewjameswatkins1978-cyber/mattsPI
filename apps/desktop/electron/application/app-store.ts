@@ -1279,6 +1279,15 @@ export class DesktopAppStore {
         // milestones follow the run's authorised policy; absent one, they wait
         // for observed GitHub merge evidence before dependants run.
         deliveryRequirement: previous?.deliveryRequirement ?? deliveryPolicy,
+        // Verification policy is host-owned too. Model-facing saves can never
+        // opt themselves into the lighter coordinator-verification lane.
+        verificationRequirement:
+          previous?.verificationRequirement ??
+          (options.source === "ui" &&
+          milestone.verificationRequirement === "coordinator" &&
+          deliveryPolicy === "local"
+            ? "coordinator"
+            : "independent-inspector"),
       };
     });
     return this.persistStudioRun(
@@ -1397,7 +1406,20 @@ export class DesktopAppStore {
       () => {
         const projectedChildren = this.orchestrationOwner.projectOrchestrationChildren();
         this.state = { ...this.state, orchestrationChildren: projectedChildren };
-        assertNewStudioMilestoneCompletionsHaveEvidence(current, run, projectedChildren);
+        const coordinatorTranscript = run.coordinatorSessionId
+          ? (this.sessionState.transcriptCache.get(
+              sessionKey({
+                workspaceId: run.workspaceId,
+                sessionId: run.coordinatorSessionId,
+              }),
+            ) ?? [])
+          : [];
+        assertNewStudioMilestoneCompletionsHaveEvidence(
+          current,
+          run,
+          projectedChildren,
+          coordinatorTranscript,
+        );
       },
       { waitMs: resolveStudioEvidenceWaitMs(process.env.PI_APP_STUDIO_EVIDENCE_WAIT_MS) },
     );
