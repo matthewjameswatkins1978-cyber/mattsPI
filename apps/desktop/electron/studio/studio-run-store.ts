@@ -74,6 +74,7 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
       "pullRequestUrl",
       "githubCheckpoints",
       "deliveryRequirement",
+      "verificationRequirement",
       "updatedAt",
     ],
     at,
@@ -89,6 +90,21 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
     value.deliveryRequirement !== "local"
   ) {
     throw new Error(`Invalid ${at}.deliveryRequirement`);
+  }
+  if (
+    value.verificationRequirement !== undefined &&
+    value.verificationRequirement !== "coordinator" &&
+    value.verificationRequirement !== "independent-inspector"
+  ) {
+    throw new Error(`Invalid ${at}.verificationRequirement`);
+  }
+  if (
+    value.verificationRequirement === "coordinator" &&
+    value.deliveryRequirement !== "local"
+  ) {
+    throw new Error(
+      "Coordinator verification is allowed only for a host-authorised local milestone",
+    );
   }
   if (
     value.deliveryRequirement === "local" &&
@@ -137,6 +153,12 @@ function decodeMilestone(value: unknown, at: string): StudioMilestone {
       : {}),
     ...(githubCheckpoints ? { githubCheckpoints } : {}),
     ...(resolvedDeliveryRequirement ? { deliveryRequirement: resolvedDeliveryRequirement } : {}),
+    ...(value.verificationRequirement
+      ? {
+          verificationRequirement:
+            value.verificationRequirement as StudioMilestone["verificationRequirement"],
+        }
+      : {}),
     updatedAt: text(value.updatedAt, `${at}.updatedAt`),
   };
 }
