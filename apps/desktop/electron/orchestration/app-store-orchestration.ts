@@ -2218,7 +2218,7 @@ function commandFromToolInput(input: unknown): string | undefined {
 }
 
 function looksLikeTestCommand(command: string): boolean {
-  return /\b(test|spec|typecheck|build|playwright|vitest|jest|tsc)\b/i.test(command);
+  return /\b(test|spec|typecheck|build|playwright|vitest|jest|tsc|check)\b/i.test(command);
 }
 
 function looksLikeBlocker(text: string): boolean {
