@@ -1160,8 +1160,17 @@ test("Studio coordinates a real three-milestone run through native Pi child thre
         exchange.name === "create_child_thread" &&
         /At most 2 child threads/i.test(exchange.resultText),
     );
+    const staleParentReadRejections = exchanges.filter(
+      (exchange) =>
+        exchange.name === "save_studio_run" &&
+        /must read the independent-inspector thread/i.test(exchange.resultText),
+    );
     expect(dependencyRejection, "M2 must be rejected while M1 is undelivered").toBeGreaterThan(-1);
     expect(capRejection, "the two-child cap must reject an early inspector").toBeGreaterThan(-1);
+    expect(
+      staleParentReadRejections,
+      "a fresh coordinator transcript must expose the successful inspector read immediately",
+    ).toHaveLength(0);
 
     // Economy: evidence readiness is reconciled inside the host, so completion
     // saves must never be retried by the model while a read is in flight. The

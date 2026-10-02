@@ -1371,13 +1371,28 @@ export class DesktopAppStore {
         throw new Error("Studio milestone status changes must follow the run lifecycle.");
       }
     }
+    const hasNewMilestoneCompletions = run.milestones.some(
+      (milestone) =>
+        milestone.status === "complete" &&
+        current?.milestones.find(({ id }) => id === milestone.id)?.status !== "complete",
+    );
+    if (hasNewMilestoneCompletions && run.coordinatorSessionId) {
+      // The completion gate requires a trusted parent-transcript observation of
+      // read_thread. Reload the coordinator transcript from the driver first so
+      // the immediately preceding successful tool result cannot be hidden by a
+      // stale in-memory transcript cache. (PR#9 264fc29)
+      await this.reloadTranscriptFromDriver({
+        workspaceId: run.workspaceId,
+        sessionId: run.coordinatorSessionId,
+      });
+    }
     // Child evidence is derived from live transcripts, and a concurrent child
     // session's event stream can delay the coordinator's own read_thread result
     // reaching the projection by tens of seconds. Instead of making the model
     // re-save until the pipeline catches up (each retry costs an inference turn
     // and re-injects the whole run into context), the host waits a bounded time
     // for the derivation to settle. Verification requirements are unchanged:
-    // the gate still rejects when the evidence never arrives.
+    // the gate still rejects when the evidence never arrives. (PR#8 36742e4)
     const { waits } = await assertStudioCompletionWithReconciliation(
       () => {
         const projectedChildren = this.orchestrationOwner.projectOrchestrationChildren();
