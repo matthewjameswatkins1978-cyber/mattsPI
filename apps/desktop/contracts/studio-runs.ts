@@ -68,6 +68,9 @@ export type StudioExternalReviewStatus =
   "awaiting-lucy" | "changes-requested" | "accepted" | "merged" | "superseded";
 
 export type StudioMilestoneDeliveryRequirement = "github-pr" | "local";
+export type StudioMilestoneVerificationRequirement =
+  | "coordinator"
+  | "independent-inspector";
 
 /**
  * Host-owned run-level default for newly planned milestones. Only the authorised
@@ -90,7 +93,28 @@ export interface StudioMilestone {
   readonly githubCheckpoints?: readonly StudioGitHubCheckpoint[];
   /** When 'github-pr', local verification alone does not unlock dependent milestones; merge observation is required. */
   readonly deliveryRequirement?: StudioMilestoneDeliveryRequirement;
+  /**
+   * Host-owned verification policy. Model-authored saves default to
+   * independent-inspector; coordinator verification is authorised only by the
+   * Studio UI for a local milestone.
+   */
+  readonly verificationRequirement?: StudioMilestoneVerificationRequirement;
   readonly updatedAt: string;
+}
+
+function resolvedStudioVerificationRequirement(
+  milestone: Pick<StudioMilestone, "verificationRequirement">,
+): StudioMilestoneVerificationRequirement {
+  return milestone.verificationRequirement ?? "independent-inspector";
+}
+
+function assertStudioVerificationRequirement(milestone: StudioMilestone): void {
+  const requirement = resolvedStudioVerificationRequirement(milestone);
+  if (requirement === "coordinator" && milestone.deliveryRequirement !== "local") {
+    throw new Error(
+      "Coordinator verification is allowed only for a host-authorised local milestone.",
+    );
+  }
 }
 
 function validSha(sha: string): boolean {
@@ -418,6 +442,7 @@ export function preserveStudioRunHistory(
       throw new Error("GitHub review evidence requires its authorised confirmation path.");
     }
     for (const milestone of next.milestones) {
+      assertStudioVerificationRequirement(milestone);
       if (
         milestone.deliveryRequirement !== "github-pr" &&
         milestone.deliveryRequirement !== "local"
@@ -515,6 +540,7 @@ export function preserveStudioRunHistory(
     throw new Error("Studio corrections require Matthew's authorised UI path.");
   }
   const milestones = next.milestones.map((milestone, index) => {
+    assertStudioVerificationRequirement(milestone);
     const previous = current.milestones[index];
     if (!previous) {
       if (
@@ -547,7 +573,9 @@ export function preserveStudioRunHistory(
       milestone.title !== previous.title ||
       milestone.instruction !== previous.instruction ||
       JSON.stringify(milestone.dependsOn) !== JSON.stringify(previous.dependsOn) ||
-      milestone.deliveryRequirement !== previous.deliveryRequirement
+      milestone.deliveryRequirement !== previous.deliveryRequirement ||
+      resolvedStudioVerificationRequirement(milestone) !==
+        resolvedStudioVerificationRequirement(previous)
     ) {
       throw new Error("Existing Studio milestone identities and dependencies are immutable.");
     }
