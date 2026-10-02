@@ -204,14 +204,14 @@ test.describe("Studio verification gate", () => {
         text: "COORDINATOR-VERIFIED: milestone-1 PASS",
         createdAt: "2026-09-29T00:02:00.000Z",
       },
-    ] as never;
+    ];
 
     expect(() =>
       assertNewStudioMilestoneCompletionsHaveEvidence(
         coordinatorRun,
         completedCoordinatorRun,
         [],
-        transcript,
+        transcript as never,
       ),
     ).not.toThrow();
 
