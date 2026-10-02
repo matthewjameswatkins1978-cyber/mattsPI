@@ -44,6 +44,8 @@ import {
 import { getChangedFiles, getFileDiff, stageFile } from "./platform/files/app-store-diff";
 import { listWorkspaceFiles, readWorkspaceFile } from "./platform/files/app-store-files";
 import { resolveExistingWorkspacePath } from "./platform/files/workspace-paths";
+import { resolveRepoWorkspaceId } from "../contracts/workspace-roots";
+import type { StudioRun } from "../contracts/studio-runs";
 import { MAIN_DEV_RELOAD_MARKER } from "./dev-reload-main-probe";
 import { NotificationManager } from "./platform/notification-manager";
 import { NotificationPermissionService } from "./platform/notification-permission";
@@ -194,6 +196,51 @@ function createStoreBackedOrchestrationRuntimeBridge(): OrchestrationRuntimeBrid
     sendMessageToThread: async (ctx, input) => {
       await store.initialize();
       return store.sendMessageToThreadToolResult(sessionRefFromExtensionContext(ctx), input);
+    },
+    waitForChildThreads: async (ctx, input) => {
+      await store.initialize();
+      return store.waitForChildThreadsToolResult(sessionRefFromExtensionContext(ctx), input);
+    },
+    saveStudioRun: async (ctx, run) => {
+      await store.initialize();
+      const sessionRef = sessionRefFromExtensionContext(ctx);
+      const workspaces = store.snapshot().workspaces;
+      const currentRoot = resolveRepoWorkspaceId(workspaces, sessionRef.workspaceId);
+      const targetRoot = resolveRepoWorkspaceId(workspaces, run.workspaceId);
+      if (!currentRoot || currentRoot !== targetRoot) {
+        throw new Error("Studio plans must remain within the current project's workspace.");
+      }
+      await store.saveStudioRun(run);
+      return {
+        content: [
+          { type: "text", text: `Saved Studio run ${run.id} at revision ${run.revision}.` },
+        ],
+        details: {
+          action: "pi_gui_save_studio_run",
+          runId: run.id,
+          revision: run.revision,
+          status: run.status,
+        },
+      };
+    },
+    listStudioRuns: async (ctx) => {
+      await store.initialize();
+      const sessionRef = sessionRefFromExtensionContext(ctx);
+      const runs = await store.listStudioRuns(sessionRef.workspaceId);
+      const workspaces = store.snapshot().workspaces;
+      const rootWorkspaceId = resolveRepoWorkspaceId(workspaces, sessionRef.workspaceId);
+      const rootWorkspace = workspaces.find(({ id }) => id === rootWorkspaceId);
+      if (!rootWorkspace) {
+        throw new Error("Unable to resolve the current Studio project workspace.");
+      }
+      const project = {
+        workspaceId: rootWorkspace.id,
+        repositoryPath: rootWorkspace.path,
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify({ project, runs }, null, 2) }],
+        details: { action: "pi_gui_list_studio_runs", project, runs },
+      };
     },
   };
 }
@@ -836,6 +883,7 @@ if (augmentedPath.changed) {
 app.setName("pi");
 
 const configuredUserDataDir = process.env.PI_APP_USER_DATA_DIR?.trim() || app.getPath("userData");
+const configuredWorktreeRoot = process.env.PI_APP_WORKTREE_ROOT?.trim();
 app.setPath("userData", configuredUserDataDir);
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -944,6 +992,7 @@ app
     };
     store = new DesktopAppStore({
       userDataDir: configuredUserDataDir,
+      ...(configuredWorktreeRoot ? { worktreeRoot: configuredWorktreeRoot } : {}),
       initialWorkspacePaths: resolveInitialWorkspacePaths(),
       getWindow: () => mainWindow,
       shouldKeepSessionDialogs: (sessionRef) =>
@@ -1068,6 +1117,7 @@ app
         conversation: store,
         orchestration: store,
         scheduledTasks: store,
+        studioRuns: store,
         settings: store,
       },
       capabilities: {

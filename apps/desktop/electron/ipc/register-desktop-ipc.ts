@@ -27,9 +27,11 @@ import { registerExtensionViewRequests } from "./extension-view-requests";
 import { registerReviewRequests, type ReviewRequestsOwner } from "./review-requests";
 import { mainFrameHandler } from "./main-frame-ipc";
 import { assertComposerAttachmentPixels } from "./composer-attachment-pixels";
+import { decodeStudioRunsFile } from "../studio/studio-run-store";
 import {
   expectAppView,
   expectBoolean,
+  expectConfirmStudioExternalReviewInput,
   expectComposerAttachments,
   expectCreateSessionInput,
   expectCreateWorktreeInput,
@@ -130,6 +132,8 @@ type ScheduledTaskOwner = Pick<
   | "beginScheduledTaskInterview"
 >;
 
+type StudioRunsOwner = Pick<DesktopAppStore, "saveStudioRun" | "confirmStudioExternalReview">;
+
 type SettingsOwner = Pick<
   DesktopAppStore,
   | "refreshRuntime"
@@ -162,6 +166,7 @@ export interface DesktopIpcOwners {
   readonly conversation: ConversationOwner;
   readonly orchestration: OrchestrationOwner;
   readonly scheduledTasks: ScheduledTaskOwner;
+  readonly studioRuns: StudioRunsOwner;
   readonly settings: SettingsOwner;
 }
 
@@ -631,6 +636,19 @@ export function registerDesktopIpc({
       owners.orchestration.setChildSupervisionLoop(expectSetChildSupervisionLoopInput(rawInput)),
     ),
   );
+  ipcMain.handle(desktopIpc.saveStudioRun, (event, rawRun: unknown) =>
+    run(event, () => {
+      const checked = decodeStudioRunsFile({ version: 1, runs: [rawRun] });
+      return owners.studioRuns.saveStudioRun(checked.runs[0]!);
+    }),
+  );
+  ipcMain.handle(desktopIpc.confirmStudioExternalReview, (event, rawInput: unknown) =>
+    run(event, () =>
+      owners.studioRuns.confirmStudioExternalReview(
+        expectConfirmStudioExternalReviewInput(rawInput),
+      ),
+    ),
+  );
   ipcMain.handle(desktopIpc.createScheduledTask, (event, rawInput: unknown) =>
     run(event, () =>
       owners.scheduledTasks.createScheduledTask(expectCreateScheduledTaskInput(rawInput)),
@@ -805,6 +823,18 @@ export function registerDesktopIpc({
       : immediate;
     return dispatch(event, () => owners.conversation.submitComposer(target, text, options));
   });
+  ipcMain.handle(
+    desktopIpc.submitComposerToTarget,
+    (event, rawText: unknown, rawTarget: unknown, rawOptions: unknown) => {
+      const target = expectSessionTarget(rawTarget);
+      const text = expectString(rawText, "text");
+      const options = expectOptionalDeliverOptions(rawOptions);
+      const dispatch = owners.conversation.composerSubmitNeedsSenderView(target, text)
+        ? run
+        : immediate;
+      return dispatch(event, () => owners.conversation.submitComposer(target, text, options));
+    },
+  );
   ipcMain.handle(desktopIpc.getSessionTree, (event, rawTarget: unknown) => {
     windows.windowForSender(event.sender);
     return owners.conversation.getSessionTree(expectSessionTarget(rawTarget));

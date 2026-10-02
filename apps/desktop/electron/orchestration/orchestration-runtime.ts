@@ -5,6 +5,7 @@ import type {
   ExtensionFactory,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { StudioRun } from "../../contracts/studio-runs";
 
 export const createChildThreadToolName = "create_child_thread";
 export const createChildThreadAction = "pi_gui_create_child_thread";
@@ -14,16 +15,39 @@ export const readThreadToolName = "read_thread";
 export const readThreadAction = "pi_gui_read_thread";
 export const sendMessageToThreadToolName = "send_message_to_thread";
 export const sendMessageToThreadAction = "pi_gui_send_message_to_thread";
+export const waitForChildThreadsToolName = "wait_for_child_threads";
+export const waitForChildThreadsAction = "pi_gui_wait_for_child_threads";
+export const saveStudioRunToolName = "save_studio_run";
+export const saveStudioRunAction = "pi_gui_save_studio_run";
+export const listStudioRunsToolName = "list_studio_runs";
+export const listStudioRunsAction = "pi_gui_list_studio_runs";
 
 export interface CreateChildThreadToolDetails {
   readonly action: typeof createChildThreadAction;
   readonly prompt: string;
+  readonly worktreePath?: string;
+  readonly branchName?: string;
+  readonly taskId?: string;
+  readonly role?: string;
+  readonly provider?: string;
+  readonly modelId?: string;
+  readonly thinkingLevel?: string;
+  readonly environment?: "local" | "worktree";
   readonly childThreadId?: string;
   readonly childWorkspaceId?: string;
   readonly childSessionId?: string;
   readonly title?: string;
   readonly deliveryStatus?: "running" | "responded";
   readonly error?: string;
+}
+
+export interface CreateChildThreadOptions {
+  readonly taskId?: string;
+  readonly role?: string;
+  readonly provider?: string;
+  readonly modelId?: string;
+  readonly thinkingLevel?: string;
+  readonly environment?: "local" | "worktree";
 }
 
 export interface OrchestrationThreadListEntry {
@@ -39,6 +63,10 @@ export interface OrchestrationThreadListEntry {
   readonly supervisionGate?: "continue" | "wake" | "stop";
   readonly supervisionReason?: string;
   readonly nextSupervisionRunAt?: string;
+  readonly role?: string;
+  readonly provider?: string;
+  readonly modelId?: string;
+  readonly environment?: "local" | "worktree";
 }
 
 export interface OrchestrationThreadTranscriptMessage {
@@ -78,10 +106,38 @@ export interface SendMessageToThreadToolDetails {
   readonly error?: string;
 }
 
+export interface WaitForChildThreadsToolDetails {
+  readonly action: typeof waitForChildThreadsAction;
+  readonly threads?: readonly Pick<
+    OrchestrationThreadListEntry,
+    "threadId" | "title" | "status" | "role" | "provider" | "modelId"
+  >[];
+  readonly timedOut?: boolean;
+  readonly aborted?: boolean;
+  readonly error?: string;
+}
+
+export interface SaveStudioRunToolDetails {
+  readonly action: typeof saveStudioRunAction;
+  readonly runId?: string;
+  readonly revision?: number;
+  readonly status?: string;
+  readonly error?: string;
+}
+
+export interface ListStudioRunsToolDetails {
+  readonly action: typeof listStudioRunsAction;
+  readonly project: {
+    readonly workspaceId: string;
+    readonly repositoryPath: string;
+  };
+  readonly runs: readonly StudioRun[];
+}
+
 export interface OrchestrationRuntimeBridge {
   readonly createChildThread: (
     ctx: ExtensionContext,
-    input: { readonly prompt: string; readonly toolCallId: string },
+    input: { readonly prompt: string; readonly toolCallId: string } & CreateChildThreadOptions,
   ) => Promise<AgentToolResult<CreateChildThreadToolDetails>>;
   readonly listThreads: (ctx: ExtensionContext) => Promise<AgentToolResult<ListThreadsToolDetails>>;
   readonly readThread: (
@@ -92,13 +148,31 @@ export interface OrchestrationRuntimeBridge {
     ctx: ExtensionContext,
     input: { readonly threadId: string; readonly message: string },
   ) => Promise<AgentToolResult<SendMessageToThreadToolDetails>>;
+  readonly waitForChildThreads: (
+    ctx: ExtensionContext,
+    input: {
+      readonly threadIds: readonly string[];
+      readonly timeoutMs: number;
+      readonly signal: AbortSignal;
+    },
+  ) => Promise<AgentToolResult<WaitForChildThreadsToolDetails>>;
+  readonly saveStudioRun: (
+    ctx: ExtensionContext,
+    run: StudioRun,
+  ) => Promise<AgentToolResult<SaveStudioRunToolDetails>>;
+  readonly listStudioRuns: (
+    ctx: ExtensionContext,
+  ) => Promise<AgentToolResult<ListStudioRunsToolDetails>>;
 }
 
 type OrchestrationToolDetails =
   | CreateChildThreadToolDetails
   | ListThreadsToolDetails
   | ReadThreadToolDetails
-  | SendMessageToThreadToolDetails;
+  | SendMessageToThreadToolDetails
+  | WaitForChildThreadsToolDetails
+  | SaveStudioRunToolDetails
+  | ListStudioRunsToolDetails;
 
 function createCreateChildThreadTool(
   bridge: OrchestrationRuntimeBridge,
@@ -120,6 +194,27 @@ function createCreateChildThreadTool(
           type: "string",
           description: "Concrete instructions for the child thread.",
         },
+        task_id: { type: "string", description: "Stable identifier for this delegated task." },
+        role: {
+          type: "string",
+          enum: [
+            "COORDINATOR",
+            "IMPLEMENTER",
+            "FAST_WORKER",
+            "RESEARCHER",
+            "INDEPENDENT_INSPECTOR",
+            "RELEASE_ENGINEER",
+          ],
+          description: "Logical role, independent of model identity.",
+        },
+        provider: { type: "string", description: "Explicit configured Pi provider id." },
+        model_id: { type: "string", description: "Explicit model id under provider." },
+        thinking_level: { type: "string", description: "Provider-supported thinking level." },
+        environment: {
+          type: "string",
+          enum: ["local", "worktree"],
+          description: "Use worktree for independent writing tasks.",
+        },
       },
       required: ["prompt"],
     },
@@ -128,7 +223,11 @@ function createCreateChildThreadTool(
       if (!prompt) {
         throw new Error("create_child_thread requires a non-empty prompt.");
       }
-      return bridge.createChildThread(ctx, { prompt, toolCallId });
+      return bridge.createChildThread(ctx, {
+        prompt,
+        toolCallId,
+        ...createChildThreadOptionsFromParams(params),
+      });
     },
   };
 }
@@ -242,6 +341,242 @@ function createSendMessageToThreadTool(
   };
 }
 
+function createWaitForChildThreadsTool(
+  bridge: OrchestrationRuntimeBridge,
+): ToolDefinition<any, OrchestrationToolDetails> {
+  return {
+    name: waitForChildThreadsToolName,
+    label: "Wait for child threads",
+    description:
+      "Wait up to 60 seconds for one or more delegated child threads to finish or fail, then continue coordinating.",
+    promptSnippet:
+      "wait_for_child_threads: wait for child completion before inspecting and accepting results.",
+    promptGuidelines: [
+      "Use wait_for_child_threads after dispatching child work; inspect finished work with read_thread.",
+      "A timeout is a status update, not evidence of completion. Wait again or handle a stalled worker.",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        thread_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Child thread ids returned by create_child_thread.",
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Maximum wait for this call, from 1 to 60000 milliseconds.",
+        },
+      },
+      required: ["thread_ids"],
+    },
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const threadIds = stringArrayParam(params, "thread_ids");
+      if (!threadIds?.length) {
+        throw new Error("wait_for_child_threads requires at least one thread_id.");
+      }
+      const timeoutMs = numberParam(params, "timeout_ms") ?? 60_000;
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
+        throw new Error("timeout_ms must be an integer between 1 and 60000.");
+      }
+      return bridge.waitForChildThreads(ctx, {
+        threadIds,
+        timeoutMs,
+        signal: signal ?? new AbortController().signal,
+      });
+    },
+  };
+}
+
+function createSaveStudioRunTool(
+  bridge: OrchestrationRuntimeBridge,
+): ToolDefinition<any, OrchestrationToolDetails> {
+  const milestoneProperties = {
+    id: { type: "string", description: "Stable milestone identifier." },
+    title: { type: "string" },
+    instruction: { type: "string", description: "Bounded, self-contained milestone packet." },
+    dependsOn: { type: "array", items: { type: "string" } },
+    status: {
+      type: "string",
+      enum: ["queued", "running", "verifying", "repair-needed", "complete", "blocked", "cancelled"],
+    },
+    workerThreadIds: { type: "array", items: { type: "string" } },
+    worktreeIds: { type: "array", items: { type: "string" } },
+    checkpointSha: { type: "string" },
+    pullRequestUrl: { type: "string" },
+    githubCheckpoints: {
+      type: "array",
+      maxItems: 100,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          repository: { type: "string" },
+          branch: { type: "string" },
+          pullRequestUrl: { type: "string" },
+          baseSha: { type: "string" },
+          headSha: { type: "string" },
+          pushedAt: { type: "string" },
+          reviewHistory: {
+            type: "array",
+            maxItems: 100,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                decision: { type: "string", enum: ["changes-requested", "accepted", "merged"] },
+                reviewedHeadSha: { type: "string" },
+                recordedAt: { type: "string" },
+                source: { type: "string", enum: ["matthew", "github-api"] },
+                mergeCommitSha: { type: "string" },
+                mergedAt: { type: "string" },
+              },
+              required: ["decision", "reviewedHeadSha", "recordedAt", "source"],
+            },
+          },
+        },
+        required: [
+          "repository",
+          "branch",
+          "pullRequestUrl",
+          "baseSha",
+          "headSha",
+          "pushedAt",
+          "reviewHistory",
+        ],
+      },
+    },
+    updatedAt: { type: "string" },
+  };
+  return {
+    name: saveStudioRunToolName,
+    label: "Save Studio run",
+    description:
+      "Persist the current Matthew Way Studio run plan and lifecycle state for this project. Call list_studio_runs first and copy project.workspaceId and project.repositoryPath exactly; never invent project identity. The run must use the complete version-1 StudioRun schema shown below.",
+    promptSnippet: "save_studio_run: persist a project-scoped Studio plan and progress update.",
+    promptGuidelines: [
+      "Call list_studio_runs before saving to obtain the current project's exact workspaceId and repositoryPath. Use a complete StudioRun object: id, workspaceId, repositoryPath, specification (string), mode (observed or autonomous), status (draft/running/paused/stopped/completed/blocked), milestones, createdAt, updatedAt, and integer revision. Each milestone requires id, title, instruction, dependsOn, status, workerThreadIds, worktreeIds, and updatedAt; checkpointSha, pullRequestUrl, and append-only githubCheckpoints are optional. Internal milestone complete means internally accepted only; never infer Lucy acceptance or merge from it.",
+      "Preserve specificationRevision and the complete corrections array when updating an existing run. A prepared correction is not applied until its impact and affected dependencies have been reconciled against the repository and active workers.",
+      "Save the full original specification and milestone/dependency plan before dispatching child work.",
+      "Update the persisted run after every material milestone, worker, verification, review, correction, or blocker change.",
+      "Use monotonically increasing revisions for updates; never overwrite an unknown newer revision.",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        run: {
+          type: "object",
+          additionalProperties: false,
+          description:
+            "A complete version-1 StudioRun record. Copy workspaceId and repositoryPath exactly from list_studio_runs.project.",
+          properties: {
+            id: { type: "string" },
+            workspaceId: { type: "string" },
+            repositoryPath: { type: "string" },
+            specification: {
+              type: "string",
+              description: "The complete original master specification.",
+            },
+            specificationRevision: { type: "integer", minimum: 1 },
+            corrections: {
+              type: "array",
+              maxItems: 100,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  id: { type: "string" },
+                  specificationRevision: { type: "integer", minimum: 2 },
+                  instruction: { type: "string" },
+                  affectedMilestoneIds: { type: "array", items: { type: "string" } },
+                  status: { type: "string", enum: ["prepared", "sent", "applied", "superseded"] },
+                  recordedAt: { type: "string" },
+                },
+                required: [
+                  "id",
+                  "specificationRevision",
+                  "instruction",
+                  "affectedMilestoneIds",
+                  "status",
+                  "recordedAt",
+                ],
+              },
+            },
+            mode: { type: "string", enum: ["observed", "autonomous"] },
+            status: {
+              type: "string",
+              enum: ["draft", "running", "paused", "stopped", "completed", "blocked"],
+            },
+            milestones: {
+              type: "array",
+              maxItems: 100,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: milestoneProperties,
+                required: [
+                  "id",
+                  "title",
+                  "instruction",
+                  "dependsOn",
+                  "status",
+                  "workerThreadIds",
+                  "worktreeIds",
+                  "updatedAt",
+                ],
+              },
+            },
+            createdAt: { type: "string" },
+            updatedAt: { type: "string" },
+            revision: { type: "integer", minimum: 1 },
+            lastError: { type: "string" },
+          },
+          required: [
+            "id",
+            "workspaceId",
+            "repositoryPath",
+            "specification",
+            "mode",
+            "status",
+            "milestones",
+            "createdAt",
+            "updatedAt",
+            "revision",
+          ],
+        },
+      },
+      required: ["run"],
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!isRecord(params) || !isRecord(params.run)) {
+        throw new Error("save_studio_run requires a complete run object.");
+      }
+      return bridge.saveStudioRun(ctx, params.run as unknown as StudioRun);
+    },
+  };
+}
+
+function createListStudioRunsTool(
+  bridge: OrchestrationRuntimeBridge,
+): ToolDefinition<any, OrchestrationToolDetails> {
+  return {
+    name: listStudioRunsToolName,
+    label: "List Studio runs",
+    description:
+      "Load the current project's exact workspace identity and saved Matthew Way Studio plans.",
+    promptSnippet:
+      "list_studio_runs: get exact project workspaceId/repositoryPath and restore durable Studio plan state.",
+    promptGuidelines: [
+      "Load saved Studio runs before planning, starting, updating, or resuming project work. The result includes project.workspaceId and project.repositoryPath; copy these exact values into save_studio_run and do not guess them.",
+      "Reconcile persisted worker and checkpoint identities against actual threads and Git state before dispatching or replaying work.",
+    ],
+    parameters: { type: "object", properties: {} },
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      return bridge.listStudioRuns(ctx);
+    },
+  };
+}
+
 export function createOrchestrationRuntimeTools(
   bridge: OrchestrationRuntimeBridge,
 ): readonly ToolDefinition<any, OrchestrationToolDetails>[] {
@@ -250,6 +585,9 @@ export function createOrchestrationRuntimeTools(
     createListThreadsTool(bridge),
     createReadThreadTool(bridge),
     createSendMessageToThreadTool(bridge),
+    createWaitForChildThreadsTool(bridge),
+    createListStudioRunsTool(bridge),
+    createSaveStudioRunTool(bridge),
   ];
 }
 
@@ -269,6 +607,26 @@ export function createChildThreadPromptFromParams(params: unknown): string | und
   }
   const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
   return prompt || undefined;
+}
+
+export function createChildThreadOptionsFromParams(params: unknown): CreateChildThreadOptions {
+  if (!isRecord(params)) return {};
+  const role = stringParam(params, "role");
+  const environment = stringParam(params, "environment");
+  const thinkingLevel =
+    stringParam(params, "thinking_level") ?? stringParam(params, "thinkingLevel");
+  return {
+    ...((stringParam(params, "task_id") ?? stringParam(params, "taskId"))
+      ? { taskId: stringParam(params, "task_id") ?? stringParam(params, "taskId") }
+      : {}),
+    ...(role ? { role } : {}),
+    ...(stringParam(params, "provider") ? { provider: stringParam(params, "provider") } : {}),
+    ...((stringParam(params, "model_id") ?? stringParam(params, "modelId"))
+      ? { modelId: stringParam(params, "model_id") ?? stringParam(params, "modelId") }
+      : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(environment === "local" || environment === "worktree" ? { environment } : {}),
+  };
 }
 
 export function createChildThreadPromptFromToolOutput(output: unknown): string | undefined {
@@ -341,6 +699,21 @@ function stringParam(params: Record<string, unknown>, key: string): string | und
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function stringArrayParam(params: unknown, key: string): readonly string[] | undefined {
+  if (!isRecord(params) || !Array.isArray(params[key])) return undefined;
+  const values = params[key] as unknown[];
+  if (!values.every((value) => typeof value === "string" && value.trim().length > 0)) {
+    return undefined;
+  }
+  return [...new Set(values.map((value) => (value as string).trim()))];
+}
+
+function numberParam(params: unknown, key: string): number | undefined {
+  if (!isRecord(params)) return undefined;
+  const value = params[key];
+  return typeof value === "number" ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -344,10 +344,17 @@ function validateUiState(value: unknown): Record<string, unknown> {
         [
           "id",
           "sourceToolCallId",
+          "taskId",
+          "role",
+          "model",
+          "thinkingLevel",
+          "environment",
           "parentWorkspaceId",
           "parentSessionId",
           "childWorkspaceId",
           "childSessionId",
+          "worktreePath",
+          "branchName",
           "title",
           "goal",
           "status",
@@ -364,6 +371,9 @@ function validateUiState(value: unknown): Record<string, unknown> {
       for (const key of [
         "id",
         "sourceToolCallId",
+        "taskId",
+        "role",
+        "thinkingLevel",
         "parentWorkspaceId",
         "parentSessionId",
         "childWorkspaceId",
@@ -373,8 +383,21 @@ function validateUiState(value: unknown): Record<string, unknown> {
         "latestTranscript",
         "createdAt",
         "updatedAt",
+        "worktreePath",
+        "branchName",
       ])
         optional(record, key, string, `${path}.${key}`);
+      optional(
+        record,
+        "environment",
+        (v) => v === "local" || v === "worktree",
+        `${path}.environment`,
+      );
+      if (record.model !== undefined) {
+        const model = objectRecord(record.model) ?? fail(`${path}.model`);
+        knownKeys(model, ["provider", "modelId"], `${path}.model`);
+        if (!string(model.provider) || !string(model.modelId)) fail(`${path}.model`);
+      }
       optional(
         record,
         "status",
@@ -493,6 +516,7 @@ function toAppView(value: unknown): AppView | undefined {
   return value === "threads" ||
     value === "new-thread" ||
     value === "scheduled" ||
+    value === "studio" ||
     value === "skills" ||
     value === "extensions" ||
     value === "settings"
@@ -566,16 +590,38 @@ function toPersistedOrchestrationChildren(value: unknown): OrchestrationChildThr
     const retainedTranscript = transcript.slice(-MAX_PERSISTED_ORCHESTRATION_TRANSCRIPT_MESSAGES);
 
     const sourceToolCallId = stringValue(candidate.sourceToolCallId);
+    const taskId = stringValue(candidate.taskId);
+    const role = stringValue(candidate.role);
+    const modelCandidate = objectRecord(candidate.model);
+    const provider = modelCandidate ? stringValue(modelCandidate.provider) : undefined;
+    const modelId = modelCandidate ? stringValue(modelCandidate.modelId) : undefined;
+    const model = provider && modelId ? { provider, modelId } : undefined;
+    const thinkingLevel = stringValue(candidate.thinkingLevel);
+    const environment =
+      candidate.environment === "worktree"
+        ? "worktree"
+        : candidate.environment === "local"
+          ? "local"
+          : undefined;
+    const worktreePath = stringValue(candidate.worktreePath);
+    const branchName = stringValue(candidate.branchName);
     const status = toOrchestrationStatus(candidate.status);
     const supervisionLoop = toPersistedSupervisionLoop(candidate.supervisionLoop, status);
     return [
       {
         id,
         ...(sourceToolCallId ? { sourceToolCallId } : {}),
+        ...(taskId ? { taskId } : {}),
+        ...(role ? { role } : {}),
+        ...(model ? { model } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+        ...(environment ? { environment } : {}),
         parentWorkspaceId,
         parentSessionId,
         childWorkspaceId,
         childSessionId,
+        ...(worktreePath ? { worktreePath } : {}),
+        ...(branchName ? { branchName } : {}),
         title,
         goal,
         status,

@@ -63,6 +63,7 @@ import { Topbar } from "./topbar";
 import { TerminalPanel } from "../features/workbench/terminal-panel";
 import { ConversationTimeline } from "../features/conversation/conversation-timeline";
 import { ScheduledTasksView } from "../features/scheduled-tasks/scheduled-tasks-view";
+import { StudioRunsView } from "../features/studio/studio-runs-view";
 import {
   ScheduledTaskEditor,
   type ScheduledEditorState,
@@ -1042,7 +1043,21 @@ export default function App() {
         ) : null}
 
         <>
-          {snapshot.activeView === "scheduled" ? (
+          {snapshot.activeView === "studio" ? (
+            <StudioRunsView
+              workspaces={rootWorkspaceOptions}
+              selectedWorkspaceId={rootWorkspace?.id ?? ""}
+              selectedThreadTarget={
+                selectedWorkspace && selectedSession
+                  ? { workspaceId: selectedWorkspace.id, sessionId: selectedSession.id }
+                  : undefined
+              }
+              runs={snapshot.studioRuns}
+              api={api}
+              setSnapshot={setSnapshot}
+              updateSnapshot={updateSnapshot}
+            />
+          ) : snapshot.activeView === "scheduled" ? (
             <ScheduledTasksView
               tasks={snapshot.scheduledTasks}
               lastError={snapshot.lastError}

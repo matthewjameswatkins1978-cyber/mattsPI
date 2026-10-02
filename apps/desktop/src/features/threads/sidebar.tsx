@@ -415,6 +415,15 @@ export function Sidebar(props: SidebarProps) {
             <span>Scheduled</span>
           </button>
           <button
+            className={`sidebar__nav-item ${activeView === "studio" ? "sidebar__nav-item--active" : ""}`}
+            type="button"
+            data-testid="sidebar-studio"
+            onClick={() => onSetActiveView("studio")}
+          >
+            <span aria-hidden="true">◈</span>
+            <span>Studio</span>
+          </button>
+          <button
             className="sidebar__nav-item"
             type="button"
             onClick={() =>

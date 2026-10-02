@@ -14,6 +14,8 @@ import type { CreateWorktreeOptions } from "../platform/worktrees/worktree-manag
 import type { WorkspaceOwnerHost } from "./app-store-workspace";
 import { NEW_THREAD_PLACEHOLDER_TITLE } from "../conversation/thread-title-constants";
 
+const CHILD_TITLE_LIMIT = 56;
+
 /* ── Public methods ─────────────────────────────────────── */
 
 export async function createWorktree(
@@ -202,6 +204,66 @@ export async function startThread(
 
     return state;
   });
+}
+
+/** Create an inspectable child session without changing the foreground selection. */
+export async function createChildSession(
+  store: WorkspaceOwnerHost,
+  input: StartThreadInput,
+): Promise<{
+  readonly snapshot: import("@pi-gui/session-driver").SessionSnapshot;
+  readonly workspacePath: string;
+  readonly branchName?: string;
+}> {
+  await store.initialize();
+  const rootWorkspace = store.workspaceRefFromState(input.rootWorkspaceId);
+  if (!rootWorkspace) throw new Error(`Unknown workspace: ${input.rootWorkspaceId}`);
+
+  const prompt = input.prompt?.trim() ?? "";
+  if (!prompt) throw new Error("Child task prompt cannot be empty.");
+
+  let targetWorkspace = rootWorkspace;
+  let created: WorktreeCatalogEntry | undefined;
+  let worktreeOptions: CreateWorktreeOptions | undefined;
+  let snapshot: import("@pi-gui/session-driver").SessionSnapshot;
+  try {
+    if (input.environment === "worktree") {
+      worktreeOptions = buildWorktreeOptions(store, rootWorkspace, undefined, undefined, prompt);
+      created = await store.worktreeManager.createWorktree(rootWorkspace, worktreeOptions);
+      const synced = await store.driver.syncWorkspace(created.path, created.displayName);
+      targetWorkspace = synced.workspace;
+    }
+    const createOptions =
+      (await store.buildCreateSessionOptions(targetWorkspace.workspaceId)) ?? {};
+    snapshot = await store.driver.createSession(targetWorkspace, {
+      ...createOptions,
+      title: titleFromPrompt(prompt),
+      ...(input.provider && input.modelId
+        ? { initialModel: { provider: input.provider, modelId: input.modelId } }
+        : {}),
+      ...(input.thinkingLevel ? { initialThinkingLevel: input.thinkingLevel } : {}),
+    });
+  } catch (error) {
+    if (created && worktreeOptions) {
+      await rollbackCreatedWorktree(store, rootWorkspace, worktreeOptions);
+      await store.driver.removeWorkspace(created.path).catch(() => undefined);
+    }
+    throw error;
+  }
+  store.seedSession(snapshot);
+  const state = store.workspaceState();
+  await store.refreshState({
+    selectedWorkspaceId: state.selectedWorkspaceId,
+    selectedSessionId: state.selectedSessionId,
+    clearLastError: true,
+    refreshWorktrees: Boolean(created),
+    publishSelectedTranscript: false,
+  });
+  return {
+    snapshot,
+    workspacePath: targetWorkspace.path,
+    ...(created?.branchName ? { branchName: created.branchName } : {}),
+  };
 }
 
 export async function forkThread(
@@ -539,4 +601,8 @@ function shortDisplayTitle(value: string | undefined, limit = 44): string | unde
     return undefined;
   }
   return trimmed.length > limit ? `${trimmed.slice(0, limit - 3).trimEnd()}...` : trimmed;
+}
+
+function titleFromPrompt(prompt: string): string {
+  return shortDisplayTitle(prompt, CHILD_TITLE_LIMIT) ?? "Delegated task";
 }

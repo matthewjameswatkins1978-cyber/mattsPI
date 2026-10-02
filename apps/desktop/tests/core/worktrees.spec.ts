@@ -110,6 +110,39 @@ test("creates and selects a worktree-backed workspace from the desktop UI", asyn
   }
 });
 
+test("uses an explicitly configured app worktree root", async () => {
+  test.setTimeout(90_000);
+  const userDataDir = await makeUserDataDir();
+  const workspacePath = await makeGitWorkspace("worktree-configured-root");
+  const configuredWorktreeRoot = join(userDataDir, "short worktrees");
+  const harness = await launchDesktop(userDataDir, {
+    initialWorkspaces: [workspacePath],
+    testMode: "background",
+    envOverrides: { PI_APP_WORKTREE_ROOT: configuredWorktreeRoot },
+  });
+
+  try {
+    const window = await harness.firstWindow();
+    const rootWorkspace = await waitForWorkspaceByPath(window, workspacePath);
+    await window
+      .getByRole("button", { name: `Workspace actions for ${rootWorkspace.name}` })
+      .click();
+    await window.getByRole("button", { name: "Create permanent worktree" }).click();
+
+    await expect
+      .poll(async () => {
+        const state = await getDesktopState(window);
+        const selected = state.workspaces.find(
+          (workspace) => workspace.id === state.selectedWorkspaceId,
+        );
+        return selected?.kind === "worktree" && isPathWithin(configuredWorktreeRoot, selected.path);
+      })
+      .toBe(true);
+  } finally {
+    await harness.close();
+  }
+});
+
 test("scopes worktree creation and startup collection to the active profile", async () => {
   test.setTimeout(180_000);
   const profileA = await makeUserDataDir("pi-gui-profile-a-");
@@ -127,7 +160,7 @@ test("scopes worktree creation and startup collection to the active profile", as
     const profileAHarness = await launchDesktop(profileA, {
       initialWorkspaces: [workspacePath],
       testMode: "background",
-      envOverrides: { HOME: fakeHome },
+      envOverrides: { HOME: fakeHome, USERPROFILE: fakeHome },
     });
     try {
       const window = await profileAHarness.firstWindow();
@@ -168,7 +201,7 @@ test("scopes worktree creation and startup collection to the active profile", as
     const profileBHarness = await launchDesktop(profileB, {
       initialWorkspaces: [],
       testMode: "background",
-      envOverrides: { HOME: fakeHome },
+      envOverrides: { HOME: fakeHome, USERPROFILE: fakeHome },
     });
     try {
       await profileBHarness.firstWindow();
@@ -182,7 +215,7 @@ test("scopes worktree creation and startup collection to the active profile", as
     const profileACompatibilityHarness = await launchDesktop(profileA, {
       initialWorkspaces: [],
       testMode: "background",
-      envOverrides: { HOME: fakeHome },
+      envOverrides: { HOME: fakeHome, USERPROFILE: fakeHome },
     });
     try {
       const window = await profileACompatibilityHarness.firstWindow();
