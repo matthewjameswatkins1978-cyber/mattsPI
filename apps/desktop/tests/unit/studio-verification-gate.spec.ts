@@ -156,4 +156,109 @@ test.describe("Studio verification gate", () => {
       ),
     ).not.toThrow();
   });
+
+
+  test("allows host-authorised coordinator verification only with parent test/git evidence and exact PASS marker", () => {
+    const coordinatorMilestone: StudioMilestone = {
+      ...milestone,
+      status: "verifying",
+      workerThreadIds: [],
+      worktreeIds: [],
+      deliveryRequirement: "local",
+      verificationRequirement: "coordinator",
+    };
+    const coordinatorRun: StudioRun = {
+      ...currentRun,
+      milestones: [coordinatorMilestone],
+    };
+    const completedCoordinatorRun: StudioRun = {
+      ...coordinatorRun,
+      milestones: [{ ...coordinatorMilestone, status: "complete" }],
+      revision: coordinatorRun.revision + 1,
+    };
+    const transcript = [
+      {
+        kind: "tool",
+        id: "tool-test",
+        callId: "tool-test",
+        toolName: "powershell",
+        status: "success",
+        label: "Test",
+        createdAt: "2026-09-29T00:01:00.000Z",
+        input: { command: "cargo test --all" },
+      },
+      {
+        kind: "tool",
+        id: "tool-git",
+        callId: "tool-git",
+        toolName: "powershell",
+        status: "success",
+        label: "Git status",
+        createdAt: "2026-09-29T00:01:30.000Z",
+        input: { command: "git status --short" },
+      },
+      {
+        kind: "message",
+        id: "assistant-pass",
+        role: "assistant",
+        text: "COORDINATOR-VERIFIED: milestone-1 PASS",
+        createdAt: "2026-09-29T00:02:00.000Z",
+      },
+    ] as never;
+
+    expect(() =>
+      assertNewStudioMilestoneCompletionsHaveEvidence(
+        coordinatorRun,
+        completedCoordinatorRun,
+        [],
+        transcript,
+      ),
+    ).not.toThrow();
+
+    expect(() =>
+      assertNewStudioMilestoneCompletionsHaveEvidence(
+        coordinatorRun,
+        completedCoordinatorRun,
+        [],
+        transcript.slice(1) as never,
+      ),
+    ).toThrow("no successful specification-relevant check evidence");
+
+    expect(() =>
+      assertNewStudioMilestoneCompletionsHaveEvidence(
+        coordinatorRun,
+        completedCoordinatorRun,
+        [],
+        transcript.filter((entry: { id: string }) => entry.id !== "tool-git") as never,
+      ),
+    ).toThrow("no successful Git diff/status inspection evidence");
+  });
+
+  test("never downgrades delegated work to coordinator verification", () => {
+    const coordinatorMilestone: StudioMilestone = {
+      ...milestone,
+      status: "verifying",
+      workerThreadIds: ["worker-1"],
+      worktreeIds: [],
+      deliveryRequirement: "local",
+      verificationRequirement: "coordinator",
+    };
+    const coordinatorRun: StudioRun = {
+      ...currentRun,
+      milestones: [coordinatorMilestone],
+    };
+    const completedCoordinatorRun: StudioRun = {
+      ...coordinatorRun,
+      milestones: [{ ...coordinatorMilestone, status: "complete" }],
+      revision: coordinatorRun.revision + 1,
+    };
+    expect(() =>
+      assertNewStudioMilestoneCompletionsHaveEvidence(
+        coordinatorRun,
+        completedCoordinatorRun,
+        [],
+        [] as never,
+      ),
+    ).toThrow("requires an independent-inspector child");
+  });
 });
