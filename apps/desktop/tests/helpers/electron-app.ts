@@ -355,6 +355,11 @@ function buildDesktopLaunchEnv(
   for (const key of Object.keys(baseEnv)) {
     if (isProviderAuthEnvVar(key)) delete baseEnv[key];
   }
+  // A GUI Electron app under test must never launch in Node mode. Electron-host
+  // shells (e.g. an agent harness) export ELECTRON_RUN_AS_NODE=1, which makes
+  // electron.exe run as plain Node and reject Chromium switches such as
+  // --remote-debugging-port that Playwright's Electron launcher supplies.
+  delete baseEnv.ELECTRON_RUN_AS_NODE;
   const env = {
     ...baseEnv,
     PI_APP_USER_DATA_DIR: userDataDir,
