@@ -16,7 +16,7 @@ const modelChecks = [
     ["sol", "luna"].map((variant) => ({
       provider,
       id: `gpt-6-${variant}`,
-      reason: "Pi 0.87.1 GPT-6 support",
+      reason: "Pi 1.0.0 GPT-6 support",
       requireReasoning: true,
       requireImageInput: true,
       requireMaxThinking: true,
