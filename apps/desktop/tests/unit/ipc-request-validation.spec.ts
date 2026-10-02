@@ -8,6 +8,7 @@ import {
   expectModelSettingsScopeMode,
   expectNotificationPreferences,
   expectOptionalDeliverOptions,
+  expectReconcileStudioGitHubPullRequestInput,
   expectSessionTarget,
   expectSetChildSupervisionLoopInput,
   expectStringArray,
@@ -36,6 +37,19 @@ test("IPC request validation rejects malformed targets and string lists", () => 
   expect(() => expectStringArray(["safe", 4], "order")).toThrow(
     "order must be an array of strings",
   );
+});
+
+test("Studio GitHub refresh IPC accepts only a run and milestone identity", () => {
+  expect(
+    expectReconcileStudioGitHubPullRequestInput({ runId: " run-a ", milestoneId: " milestone-a " }),
+  ).toEqual({ runId: "run-a", milestoneId: "milestone-a" });
+  expect(() =>
+    expectReconcileStudioGitHubPullRequestInput({
+      runId: "run-a",
+      milestoneId: "milestone-a",
+      merged: true,
+    }),
+  ).toThrow("unsupported fields");
 });
 
 test("IPC request validation allowlists composer delivery modes", () => {

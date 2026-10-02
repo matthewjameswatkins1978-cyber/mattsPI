@@ -41,6 +41,7 @@ import {
   expectHostUiResponse,
   expectModelSettingsScopeMode,
   expectNavigateSessionTreeOptions,
+  expectReconcileStudioGitHubPullRequestInput,
   expectNonEmptyString,
   expectNotificationPreferences,
   expectOptionalDeliverOptions,
@@ -132,7 +133,10 @@ type ScheduledTaskOwner = Pick<
   | "beginScheduledTaskInterview"
 >;
 
-type StudioRunsOwner = Pick<DesktopAppStore, "saveStudioRun" | "confirmStudioExternalReview">;
+type StudioRunsOwner = Pick<
+  DesktopAppStore,
+  "saveStudioRun" | "confirmStudioExternalReview" | "reconcileStudioGitHubPullRequest"
+>;
 
 type SettingsOwner = Pick<
   DesktopAppStore,
@@ -646,6 +650,13 @@ export function registerDesktopIpc({
     run(event, () =>
       owners.studioRuns.confirmStudioExternalReview(
         expectConfirmStudioExternalReviewInput(rawInput),
+      ),
+    ),
+  );
+  ipcMain.handle(desktopIpc.reconcileStudioGitHubPullRequest, (event, rawInput: unknown) =>
+    run(event, () =>
+      owners.studioRuns.reconcileStudioGitHubPullRequest(
+        expectReconcileStudioGitHubPullRequestInput(rawInput),
       ),
     ),
   );

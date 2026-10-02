@@ -68,8 +68,13 @@ import {
   type ScheduledTaskRecord,
   type UpdateScheduledTaskInput,
 } from "../../contracts/desktop-state";
-import type { ConfirmStudioExternalReviewInput, StudioRun } from "../../contracts/studio-runs";
+import type {
+  ConfirmStudioExternalReviewInput,
+  ReconcileStudioGitHubPullRequestInput,
+  StudioRun,
+} from "../../contracts/studio-runs";
 import {
+  applyStudioGitHubPullRequestObservation,
   preserveStudioRunHistory,
   recordStudioGitHubReview,
   transitionStudioMilestone,
@@ -151,6 +156,7 @@ import {
   readStudioRunsFile,
   writeStudioRunsFile,
 } from "../studio/studio-run-store";
+import { readStudioGitHubPullRequest } from "../studio/github-pull-request";
 import {
   isSessionActivelyViewed,
   isSessionVisibleInWindow,
@@ -1241,16 +1247,16 @@ export class DesktopAppStore {
   }
 
   async saveStudioRun(inputRun: StudioRun): Promise<DesktopAppState> {
-    return this.persistStudioRun(inputRun, false);
+    return this.persistStudioRun(inputRun, "none");
   }
 
   private async persistStudioRun(
     inputRun: StudioRun,
-    allowGitHubEvidenceAppend: boolean,
+    authority: "none" | "lucy-confirmation" | "github-observer",
   ): Promise<DesktopAppState> {
     await this.initialize();
     const current = this.state.studioRuns.find(({ id }) => id === inputRun.id);
-    const run = preserveStudioRunHistory(current, inputRun, allowGitHubEvidenceAppend);
+    const run = preserveStudioRunHistory(current, inputRun, authority);
     const rootWorkspaceId = resolveRepoWorkspaceId(this.state.workspaces, run.workspaceId);
     const root = this.state.workspaces.find(({ id }) => id === rootWorkspaceId);
     if (!root || resolve(root.path).toLowerCase() !== resolve(run.repositoryPath).toLowerCase()) {
@@ -1352,7 +1358,7 @@ export class DesktopAppStore {
         revision: currentRun.revision + 1,
         updatedAt: reviewedMilestone.updatedAt,
       },
-      true,
+      "lucy-confirmation",
     );
   }
 
@@ -1434,6 +1440,38 @@ export class DesktopAppStore {
     }
     await this.persistUiState();
     return this.emit();
+  }
+
+  async reconcileStudioGitHubPullRequest(
+    input: ReconcileStudioGitHubPullRequestInput,
+  ): Promise<DesktopAppState> {
+    await this.initialize();
+    const run = this.state.studioRuns.find(({ id }) => id === input.runId);
+    const milestone = run?.milestones.find(({ id }) => id === input.milestoneId);
+    if (!run || !milestone) throw new Error("Studio run or milestone no longer exists.");
+    const rootId = resolveRepoWorkspaceId(this.state.workspaces, run.workspaceId);
+    const rootWorkspace = this.state.workspaces.find(({ id }) => id === rootId);
+    if (
+      !rootWorkspace ||
+      resolve(rootWorkspace.path).toLowerCase() !== resolve(run.repositoryPath).toLowerCase()
+    ) {
+      throw new Error("Studio GitHub refresh must target the project's root repository.");
+    }
+    const pullRequestUrl =
+      milestone.githubCheckpoints?.at(-1)?.pullRequestUrl ?? milestone.pullRequestUrl;
+    if (!pullRequestUrl) throw new Error("This milestone has no saved GitHub pull request URL.");
+    const observation = await readStudioGitHubPullRequest(run.repositoryPath, pullRequestUrl);
+    const updatedMilestone = applyStudioGitHubPullRequestObservation(milestone, observation);
+    if (updatedMilestone === milestone) return this.getState();
+    const updatedRun: StudioRun = {
+      ...run,
+      milestones: run.milestones.map((entry) =>
+        entry.id === milestone.id ? updatedMilestone : entry,
+      ),
+      updatedAt: observation.observedAt,
+      revision: run.revision + 1,
+    };
+    return this.persistStudioRun(updatedRun, "github-observer");
   }
 
   async setSidebarCollapsed(sidebarCollapsed: boolean): Promise<DesktopAppState> {
