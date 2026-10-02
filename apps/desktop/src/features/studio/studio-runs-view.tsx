@@ -1,6 +1,10 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import type { StudioRun, StudioRunDeliveryPolicy } from "../../../contracts/studio-runs";
-import { studioExternalReviewStatus, transitionStudioRun } from "../../../contracts/studio-runs";
+import {
+  hasTrustedGitHubMergeForCheckpoint,
+  studioExternalReviewStatus,
+  transitionStudioRun,
+} from "../../../contracts/studio-runs";
 import type {
   DesktopAppState,
   OrchestrationChildThread,
@@ -508,6 +512,10 @@ export function StudioRunsView({
                               <p>
                                 GitHub review · {reviewStatus} · HEAD{" "}
                                 <code>{checkpoint.headSha}</code>
+                                {hasTrustedGitHubMergeForCheckpoint(checkpoint) &&
+                                reviewStatus !== "merged" ? (
+                                  <> GitHub already merged this SHA; Lucy review still open </>
+                                ) : null}
                               </p>
                               <button
                                 className="button"

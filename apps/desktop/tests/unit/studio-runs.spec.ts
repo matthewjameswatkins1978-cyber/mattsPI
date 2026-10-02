@@ -408,7 +408,10 @@ test.describe("Studio run plan state", () => {
       mergeCommitSha: "c".repeat(40),
       mergedAt: "2026-09-29T00:01:00.000Z",
     });
-    expect(studioExternalReviewStatus(verifiedAfterLegacyClaim, headSha)).toBe("merged");
+    // Corrected semantics: a GitHub merge observation alone is code truth, never
+    // acceptance. Without a trusted Lucy ACCEPT for the exact SHA the checkpoint
+    // stays reviewable instead of reporting merged.
+    expect(studioExternalReviewStatus(verifiedAfterLegacyClaim, headSha)).toBe("awaiting-lucy");
     expect(() =>
       preserveStudioRunHistory(decoded, {
         ...decoded,
@@ -439,7 +442,9 @@ test.describe("Studio run plan state", () => {
       mergedAt: "2026-09-29T00:01:00.000Z",
     };
     const merged = applyStudioGitHubPullRequestObservation(checkpoint, observation);
-    expect(studioExternalReviewStatus(merged, headSha)).toBe("merged");
+    // Corrected semantics: the merge observation is recorded (code truth) but
+    // the checkpoint reports awaiting-lucy — no Lucy acceptance exists yet.
+    expect(studioExternalReviewStatus(merged, headSha)).toBe("awaiting-lucy");
     expect(merged.githubCheckpoints?.[0]?.reviewHistory.at(-1)).toMatchObject({
       source: "github-api",
       decision: "merged",
@@ -450,7 +455,7 @@ test.describe("Studio run plan state", () => {
       version: 1,
       runs: [{ ...run, milestones: [merged, run.milestones[1]] }],
     }).runs[0]!;
-    expect(studioExternalReviewStatus(persisted.milestones[0]!, headSha)).toBe("merged");
+    expect(studioExternalReviewStatus(persisted.milestones[0]!, headSha)).toBe("awaiting-lucy");
     expect(() =>
       preserveStudioRunHistory(
         { ...run, milestones: [checkpoint, run.milestones[1]] },
@@ -523,7 +528,7 @@ test.describe("Studio run plan state", () => {
     expect(availableStudioMilestones(completed).map(({ id }) => id)).toEqual(["m2"]);
   });
 
-  test("gates dependent milestones on PR merge while allowing unaffected work during Lucy review", () => {
+  test("gates dependent milestones on Lucy acceptance plus PR merge while allowing unaffected work during Lucy review", () => {
     const baseSha = "a".repeat(40);
     const headSha = "b".repeat(40);
     const mergeSha = "c".repeat(40);
@@ -577,7 +582,9 @@ test.describe("Studio run plan state", () => {
     expect(preserveStudioRunHistory(m1Complete, runAwaitingLucy)).toBeTruthy();
     expect(availableStudioMilestones(runAwaitingLucy).map(({ id }) => id)).toEqual(["m3"]);
 
-    // 3. Actual GitHub merge observation recorded on M1: dependent M2 becomes available alongside M3
+    // 3. Actual GitHub merge observation recorded on M1 WITHOUT Lucy acceptance:
+    // the merge fact is recorded (code truth) but dependent M2 stays blocked;
+    // independent M3 remains available.
     const observation = {
       repository: "owner/repo",
       branch: "studio/m1",
@@ -596,7 +603,24 @@ test.describe("Studio run plan state", () => {
       revision: runAwaitingLucy.revision + 1,
     };
     expect(preserveStudioRunHistory(runAwaitingLucy, runMerged, "github-observer")).toBeTruthy();
-    expect(availableStudioMilestones(runMerged).map(({ id }) => id)).toEqual(["m2", "m3"]);
+    expect(availableStudioMilestones(runMerged).map(({ id }) => id)).toEqual(["m3"]);
+
+    // 3b. Authorised Lucy ACCEPT for the exact SHA afterwards unlocks M2.
+    // Merge-first does not block the recovery: acceptance is recorded
+    // append-only on top of the merge observation.
+    const m1Accepted = recordStudioGitHubReview(m1Merged, {
+      headSha,
+      decision: "accepted",
+      now: "2026-09-29T00:11:00.000Z",
+    });
+    const runAccepted: StudioRun = {
+      ...runMerged,
+      milestones: [m1Accepted, runMerged.milestones[1]!, runMerged.milestones[2]!],
+      revision: runMerged.revision + 1,
+    };
+    expect(
+      availableStudioMilestones(runAccepted).map(({ id }) => id),
+    ).toEqual(["m2", "m3"]);
 
     // 4. Explicitly local-only milestones: normal local dependency progression remains possible
     const localRun: StudioRun = {

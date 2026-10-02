@@ -157,15 +157,11 @@ export function recordStudioGitHubReview(
     .reverse()
     .find(({ source }) => source === "matthew-confirmed-lucy");
   if (latestTrusted?.decision === input.decision) return milestone;
-  if (
-    checkpoint.reviewHistory.some(
-      ({ decision, source }) => decision === "merged" && source === "github-api",
-    )
-  ) {
-    throw new Error(
-      "Lucy review cannot be recorded after GitHub confirms the pull request merged.",
-    );
-  }
+  // Recovery from out-of-order reality: GitHub may observe a merge before
+  // Lucy reviews the SHA. Recording that fact must never convert the merge
+  // into acceptance, and Lucy must still be able to accept (or request
+  // changes on) the exact SHA afterwards. Append-only; the merge observation
+  // is preserved untouched.
   checkpoints[index] = {
     ...checkpoint,
     reviewHistory: [
@@ -238,6 +234,47 @@ export function recordStudioGitHubMerge(
   };
 }
 
+function reviewTargetsCheckpoint(
+  reviewedHeadSha: string,
+  checkpointHeadSha: string,
+): boolean {
+  return reviewedHeadSha.toLowerCase() === checkpointHeadSha.toLowerCase();
+}
+
+/**
+ * Trusted Lucy ACCEPT for the exact checkpoint SHA. Never transfers across
+ * SHAs: a newer checkpoint invalidates prior acceptance for dependency
+ * purposes, and each checkpoint is judged only by reviews naming its SHA.
+ */
+export function hasTrustedLucyAcceptForCheckpoint(checkpoint: {
+  readonly headSha: string;
+  readonly reviewHistory: readonly StudioGitHubReview[];
+}): boolean {
+  return checkpoint.reviewHistory.some(
+    ({ decision, source, reviewedHeadSha }) =>
+      decision === "accepted" &&
+      source === "matthew-confirmed-lucy" &&
+      reviewTargetsCheckpoint(reviewedHeadSha, checkpoint.headSha),
+  );
+}
+
+/**
+ * Trusted GitHub merge observation for the exact checkpoint SHA, with valid
+ * merge evidence. Recording this fact never constitutes acceptance.
+ */
+export function hasTrustedGitHubMergeForCheckpoint(checkpoint: {
+  readonly headSha: string;
+  readonly reviewHistory: readonly StudioGitHubReview[];
+}): boolean {
+  return checkpoint.reviewHistory.some(
+    ({ decision, source, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) =>
+      decision === "merged" &&
+      source === "github-api" &&
+      reviewTargetsCheckpoint(reviewedHeadSha, checkpoint.headSha) &&
+      Boolean(observedAt && mergeCommitSha && mergedAt),
+  );
+}
+
 export function studioExternalReviewStatus(
   milestone: StudioMilestone,
   headSha: string,
@@ -250,22 +287,24 @@ export function studioExternalReviewStatus(
   if (index < 0) throw new Error("Unknown GitHub checkpoint SHA.");
   if (index !== checkpoints.length - 1) return "superseded";
   const checkpoint = checkpoints[index]!;
-  const mergeObservation = checkpoint.reviewHistory.find(
-    ({ decision, source, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) =>
-      decision === "merged" &&
-      source === "github-api" &&
-      reviewedHeadSha.toLowerCase() === checkpoint.headSha.toLowerCase() &&
-      Boolean(observedAt && mergeCommitSha && mergedAt),
-  );
-  if (mergeObservation) return "merged";
+  // A GitHub merge observation is code truth, never acceptance: a checkpoint
+  // whose merge was observed before Lucy reviewed it stays reviewable.
+  // "merged" requires BOTH trusted facts for the same exact SHA.
+  if (
+    hasTrustedGitHubMergeForCheckpoint(checkpoint) &&
+    hasTrustedLucyAcceptForCheckpoint(checkpoint)
+  ) {
+    return "merged";
+  }
   const review = [...checkpoint.reviewHistory]
     .reverse()
     .find(
-      ({ reviewedHeadSha }) => reviewedHeadSha.toLowerCase() === checkpoint.headSha.toLowerCase(),
+      ({ source, reviewedHeadSha }) =>
+        source === "matthew-confirmed-lucy" &&
+        reviewTargetsCheckpoint(reviewedHeadSha, checkpoint.headSha),
     );
-  if (review?.source !== "matthew-confirmed-lucy") return "awaiting-lucy";
-  if (review.decision === "merged") return "awaiting-lucy";
-  return review?.decision ?? "awaiting-lucy";
+  if (!review || review.decision === "merged") return "awaiting-lucy";
+  return review.decision;
 }
 
 /** Applies a trusted, read-only GitHub API observation to the append-only checkpoint history. */
@@ -723,12 +762,14 @@ export function isStudioMilestoneDependencySatisfied(milestone: StudioMilestone)
   ) {
     const latestCheckpoint = milestone.githubCheckpoints?.at(-1);
     if (!latestCheckpoint) return false;
-    return latestCheckpoint.reviewHistory.some(
-      ({ decision, source, reviewedHeadSha, observedAt, mergeCommitSha, mergedAt }) =>
-        decision === "merged" &&
-        source === "github-api" &&
-        reviewedHeadSha.toLowerCase() === latestCheckpoint.headSha.toLowerCase() &&
-        Boolean(observedAt && mergeCommitSha && mergedAt),
+    // A GitHub-delivered milestone satisfies downstream dependencies only when
+    // BOTH trusted facts exist for the same latest checkpoint SHA: Lucy has
+    // explicitly accepted the exact SHA through the Matthew-confirmation path,
+    // AND GitHub has observed that exact SHA merged. Merge truth alone — e.g. a
+    // manually merged but never reviewed PR — never unlocks dependents.
+    return (
+      hasTrustedLucyAcceptForCheckpoint(latestCheckpoint) &&
+      hasTrustedGitHubMergeForCheckpoint(latestCheckpoint)
     );
   }
   if (milestone.deliveryRequirement === "local") {
