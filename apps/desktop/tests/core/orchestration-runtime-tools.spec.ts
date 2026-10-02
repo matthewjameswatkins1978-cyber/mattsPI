@@ -304,9 +304,29 @@ test("create_child_thread returns after a slow worker starts, before its turn co
         toolName: "create_child_thread",
         toolCallId: "create-child-forced-local",
         sessionRef: parentRef,
-        params: { prompt, role: "IMPLEMENTER", environment: "local" },
+        params: {
+          prompt,
+          task_id: "studio-runtime-proof-local-attempt",
+          role: "IMPLEMENTER",
+          environment: "local",
+        },
       }),
     ).rejects.toThrow(/require a managed worktree/i);
+    await expect(
+      runOrchestrationRuntimeTool(harness, {
+        toolName: "create_child_thread",
+        toolCallId: "create-child-studio-missing-task-id",
+        sessionRef: parentRef,
+        params: {
+          prompt,
+          role: "IMPLEMENTER",
+          provider: "slow-test",
+          model_id: "slow",
+          thinking_level: "low",
+          environment: "worktree",
+        },
+      }),
+    ).rejects.toThrow(/requires a stable task_id/i);
     // The server never answers, so the child's first turn cannot complete. A tool
     // that awaited the turn would never return, and the test timeout names this step.
     const result = await test.step("create_child_thread returns while the turn is in flight", () =>
@@ -351,6 +371,26 @@ test("create_child_thread returns after a slow worker starts, before its turn co
       branchName: expect.stringMatching(/^pi\//),
     });
     expect(child?.childWorkspaceId).not.toBe(parentRef.workspaceId);
+
+    const duplicateTask = await runOrchestrationRuntimeTool(harness, {
+      toolName: "create_child_thread",
+      toolCallId: "replayed-child-with-new-tool-call-id",
+      sessionRef: parentRef,
+      params: {
+        prompt,
+        task_id: "runtime-proof-child",
+        role: "IMPLEMENTER",
+        provider: "slow-test",
+        model_id: "slow",
+        thinking_level: "low",
+      },
+    });
+    expect(duplicateTask.details).toMatchObject({ childSessionId: child?.childSessionId });
+    expect(
+      (await getDesktopState(window)).orchestrationChildren.filter(
+        (entry) => entry.taskId === "runtime-proof-child",
+      ),
+    ).toHaveLength(1);
 
     const savedRun = (await getDesktopState(window)).studioRuns.find(
       ({ id }) => id === studioRun.id,
@@ -436,7 +476,11 @@ test("create_child_thread returns after a slow worker starts, before its turn co
         toolName: "create_child_thread",
         toolCallId: "create-child-third",
         sessionRef: parentRef,
-        params: { prompt: "A third child must be rejected.", role: "RESEARCHER" },
+        params: {
+          prompt: "A third child must be rejected.",
+          task_id: "studio-runtime-proof-third-child",
+          role: "RESEARCHER",
+        },
       }),
     ).rejects.toThrow(/at most 2 child threads/i);
 

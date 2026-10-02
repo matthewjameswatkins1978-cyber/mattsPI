@@ -186,6 +186,7 @@ function createCreateChildThreadTool(
     promptGuidelines: [
       "Use create_child_thread when the user asks you to spin up, delegate to, or run a separate child thread.",
       "Keep the child prompt concrete and self-contained so the user can inspect the resulting thread.",
+      "For Studio work, include a stable task_id derived from the run, milestone, worker purpose and repair attempt. Reuse exactly the same id when replaying that dispatch; do not invent a new id for a duplicate event.",
     ],
     parameters: {
       type: "object",

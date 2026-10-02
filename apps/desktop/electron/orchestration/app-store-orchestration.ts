@@ -252,6 +252,10 @@ async function createChildThreadRecord(
     );
   }
 
+  if (studioRun && !input.taskId) {
+    throw new Error("Studio child dispatch requires a stable task_id for duplicate-safe replay.");
+  }
+
   if (input.taskId && input.taskId.length > 128) {
     throw new Error("Child task_id must be 128 characters or fewer.");
   }
