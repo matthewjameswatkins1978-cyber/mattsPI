@@ -171,7 +171,11 @@ function sseChunk(payload: Record<string, unknown>): string {
 
 export async function startScriptedOpenAiServer(
   actors: readonly ScriptedActor[],
-  options: { readonly modelId?: string; readonly fallback?: ScriptedActor } = {},
+  options: {
+    readonly modelId?: string;
+    readonly fallback?: ScriptedActor;
+    readonly includeUsage?: boolean;
+  } = {},
 ): Promise<ScriptedOpenAiServer> {
   const modelId = options.modelId ?? "scripted";
   const log: ScriptedRequestLogEntry[] = [];
@@ -237,6 +241,19 @@ export async function startScriptedOpenAiServer(
       );
       return;
     }
+    const usage = options.includeUsage
+      ? (() => {
+          const promptTokens = Math.ceil(JSON.stringify(messages).length / 4);
+          const completionText =
+            scripted.kind === "text" ? scripted.text : JSON.stringify(scripted.toolCall.args);
+          const completionTokens = Math.ceil(completionText.length / 4);
+          return {
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens,
+            total_tokens: promptTokens + completionTokens,
+          };
+        })()
+      : undefined;
     log.push({
       index: log.length,
       actor: actor.name,
@@ -303,6 +320,15 @@ export async function startScriptedOpenAiServer(
         sseChunk({
           ...base,
           choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        }),
+      );
+    }
+    if (usage) {
+      response.write(
+        sseChunk({
+          ...base,
+          choices: [],
+          usage,
         }),
       );
     }
