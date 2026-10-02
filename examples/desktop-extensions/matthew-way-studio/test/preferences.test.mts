@@ -122,7 +122,26 @@ await test("the models command saves model and thinking for future tasks, not th
     await command.handler("", ctx);
     assert.match(
       sentMessages.at(-1) ?? "",
-      /IMPLEMENTER: qwen-token-plan\/qwen3\.8-max; thinking high/,
+      /IMPLEMENTER: qwen-token-plan\/qwen3\.8-max; thinking high; host route VERIFIED/,
+    );
+
+    const unavailableCtx = {
+      ...ctx,
+      scopedModels: [],
+      modelRegistry: {
+        getAvailable: () => [],
+        hasConfiguredAuth: () => false,
+        find: () => undefined,
+      },
+    };
+    await command.handler("start", unavailableCtx);
+    assert.match(
+      sentMessages.at(-1) ?? "",
+      /INDEPENDENT_INSPECTOR: .*host route UNAVAILABLE/,
+    );
+    assert.match(
+      sentMessages.at(-1) ?? "",
+      /mark verification blocked and do not dispatch a substitute or use metered fallback/i,
     );
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
