@@ -211,3 +211,82 @@ test("Studio Start submits to the prepared thread and records running only after
     await harness.close();
   }
 });
+
+test("Studio restart pauses a saved running plan until explicit reconciliation and resume", async () => {
+  test.setTimeout(90_000);
+  const userDataDir = await makeUserDataDir();
+  const workspacePath = await makeWorkspace("studio-restart-recovery");
+  await writeProjectExtension(workspacePath, "studio-command-fixture.ts", studioCommandFixture);
+
+  const first = await launchDesktop(userDataDir, {
+    initialWorkspaces: [workspacePath],
+    testMode: "background",
+  });
+  let coordinatorId = "";
+  let workspaceId = "";
+  try {
+    const window = await first.firstWindow();
+    const workspace = await waitForWorkspaceByPath(window, workspacePath);
+    workspaceId = workspace.id;
+    await createSessionViaIpc(window, workspacePath, "Restarted coordinator");
+    const coordinator = await waitForSessionByTitle(window, workspace.id, "Restarted coordinator");
+    coordinatorId = coordinator.id;
+    await selectSession(window, "Restarted coordinator");
+    await window.getByTestId("sidebar-studio").click();
+    await window
+      .getByLabel("Specification or implementation packet")
+      .fill("Resume this run without duplicating work after a desktop restart.");
+    await window.getByRole("button", { name: "Prepare in current thread" }).click();
+    await window.getByRole("button", { name: "Send message" }).click();
+    await expect(window.getByRole("textbox", { name: "Composer" })).toHaveValue(
+      "STUDIO_PLAN_HANDLED",
+    );
+    await window.getByTestId("sidebar-studio").click();
+    await window.getByRole("button", { name: "Start in prepared thread" }).click();
+    await expect
+      .poll(async () => (await getDesktopState(window)).studioRuns[0]?.status)
+      .toBe("running");
+  } finally {
+    await first.close();
+  }
+
+  const second = await launchDesktop(userDataDir, {
+    initialWorkspaces: [workspacePath],
+    testMode: "background",
+  });
+  try {
+    const window = await second.firstWindow();
+    await window.getByTestId("sidebar-studio").click();
+    await expect(window.getByTestId("studio-run")).toContainText("paused");
+    await expect(window.getByTestId("studio-run-recovery-note")).toContainText(
+      "Restart recovery required",
+    );
+    expect((await getDesktopState(window)).studioRuns[0]).toMatchObject({
+      status: "paused",
+      coordinatorSessionId: coordinatorId,
+      revision: 3,
+    });
+    await expect(
+      runOrchestrationRuntimeTool(second, {
+        toolName: "create_child_thread",
+        toolCallId: "studio-restart-dispatch-must-wait-for-reconciliation",
+        sessionRef: { workspaceId, sessionId: coordinatorId },
+        params: { prompt: "Do not dispatch before restart reconciliation." },
+      }),
+    ).rejects.toThrow(/Studio run .* is paused/);
+    await window.getByRole("button", { name: "Resume after reconciliation" }).click();
+    await expect
+      .poll(async () => (await getDesktopState(window)).studioRuns[0]?.status)
+      .toBe("running");
+    expect((await getDesktopState(window)).studioRuns[0]).not.toHaveProperty("lastError");
+    expect((await getDesktopState(window)).studioRuns[0]).toMatchObject({
+      workspaceId,
+      coordinatorSessionId: coordinatorId,
+    });
+    await expect(window.getByRole("textbox", { name: "Composer" })).toHaveValue(
+      "STUDIO_START_HANDLED",
+    );
+  } finally {
+    await second.close();
+  }
+});
