@@ -70,12 +70,14 @@ import {
 } from "../../contracts/desktop-state";
 import type {
   ConfirmStudioExternalReviewInput,
+  RecordStudioCorrectionInput,
   ReconcileStudioGitHubPullRequestInput,
   StudioRun,
 } from "../../contracts/studio-runs";
 import {
   applyStudioGitHubPullRequestObservation,
   preserveStudioRunHistory,
+  recordStudioCorrection as appendStudioCorrection,
   recordStudioGitHubReview,
   transitionStudioMilestone,
   transitionStudioRun,
@@ -1251,9 +1253,21 @@ export class DesktopAppStore {
     return this.persistStudioRun(inputRun, "none");
   }
 
+  async recordStudioCorrection(input: RecordStudioCorrectionInput): Promise<DesktopAppState> {
+    await this.initialize();
+    const currentRun = this.state.studioRuns.find(({ id }) => id === input.runId);
+    if (!currentRun) throw new Error("Studio run no longer exists.");
+    const updatedRun = appendStudioCorrection(currentRun, {
+      id: input.id,
+      instruction: input.instruction,
+      affectedMilestoneIds: input.affectedMilestoneIds,
+    });
+    return this.persistStudioRun(updatedRun, "matthew-correction");
+  }
+
   private async persistStudioRun(
     inputRun: StudioRun,
-    authority: "none" | "lucy-confirmation" | "github-observer",
+    authority: "none" | "matthew-correction" | "lucy-confirmation" | "github-observer",
   ): Promise<DesktopAppState> {
     await this.initialize();
     const current = this.state.studioRuns.find(({ id }) => id === inputRun.id);

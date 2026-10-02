@@ -17,6 +17,7 @@ import type { SessionRef } from "@pi-gui/session-driver/types";
 import type { SaveTaskWorkbenchTemplateInput, TaskWorkbenchTemplate } from "./workbench";
 import type {
   ConfirmStudioExternalReviewInput,
+  RecordStudioCorrectionInput,
   ReconcileStudioGitHubPullRequestInput,
   StudioRun,
 } from "./studio-runs";
@@ -119,6 +120,7 @@ export const desktopIpc = {
   sendChildThreadFollowUp: "pi-gui:send-child-thread-follow-up",
   setChildSupervisionLoop: "pi-gui:set-child-supervision-loop",
   saveStudioRun: "pi-gui:save-studio-run",
+  recordStudioCorrection: "pi-gui:record-studio-correction",
   confirmStudioExternalReview: "pi-gui:confirm-studio-external-review",
   reconcileStudioGitHubPullRequest: "pi-gui:reconcile-studio-github-pr",
   submitComposerToTarget: "pi-gui:submit-composer-to-target",
@@ -697,6 +699,7 @@ export interface PiDesktopApi {
   sendChildThreadFollowUp(input: SendChildThreadFollowUpInput): Promise<DesktopAppState>;
   setChildSupervisionLoop(input: SetChildSupervisionLoopInput): Promise<DesktopAppState>;
   saveStudioRun(run: StudioRun): Promise<DesktopAppState>;
+  recordStudioCorrection(input: RecordStudioCorrectionInput): Promise<DesktopAppState>;
   confirmStudioExternalReview(input: ConfirmStudioExternalReviewInput): Promise<DesktopAppState>;
   reconcileStudioGitHubPullRequest(
     input: ReconcileStudioGitHubPullRequestInput,

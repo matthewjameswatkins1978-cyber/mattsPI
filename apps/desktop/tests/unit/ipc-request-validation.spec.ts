@@ -8,6 +8,7 @@ import {
   expectModelSettingsScopeMode,
   expectNotificationPreferences,
   expectOptionalDeliverOptions,
+  expectRecordStudioCorrectionInput,
   expectReconcileStudioGitHubPullRequestInput,
   expectSessionTarget,
   expectSetChildSupervisionLoopInput,
@@ -48,6 +49,30 @@ test("Studio GitHub refresh IPC accepts only a run and milestone identity", () =
       runId: "run-a",
       milestoneId: "milestone-a",
       merged: true,
+    }),
+  ).toThrow("unsupported fields");
+});
+
+test("Studio correction IPC accepts Matthew's bounded correction fields only", () => {
+  expect(
+    expectRecordStudioCorrectionInput({
+      runId: " run-a ",
+      id: " correction-a ",
+      instruction: " Add the missing integration case. ",
+      affectedMilestoneIds: ["milestone-a"],
+    }),
+  ).toEqual({
+    runId: "run-a",
+    id: "correction-a",
+    instruction: "Add the missing integration case.",
+    affectedMilestoneIds: ["milestone-a"],
+  });
+  expect(() =>
+    expectRecordStudioCorrectionInput({
+      runId: "run-a",
+      id: "correction-a",
+      instruction: "Follow-up correction",
+      status: "applied",
     }),
   ).toThrow("unsupported fields");
 });

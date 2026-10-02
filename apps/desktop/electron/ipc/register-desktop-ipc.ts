@@ -32,6 +32,7 @@ import {
   expectAppView,
   expectBoolean,
   expectConfirmStudioExternalReviewInput,
+  expectRecordStudioCorrectionInput,
   expectComposerAttachments,
   expectCreateSessionInput,
   expectCreateWorktreeInput,
@@ -135,7 +136,10 @@ type ScheduledTaskOwner = Pick<
 
 type StudioRunsOwner = Pick<
   DesktopAppStore,
-  "saveStudioRun" | "confirmStudioExternalReview" | "reconcileStudioGitHubPullRequest"
+  | "saveStudioRun"
+  | "recordStudioCorrection"
+  | "confirmStudioExternalReview"
+  | "reconcileStudioGitHubPullRequest"
 >;
 
 type SettingsOwner = Pick<
@@ -645,6 +649,11 @@ export function registerDesktopIpc({
       const checked = decodeStudioRunsFile({ version: 1, runs: [rawRun] });
       return owners.studioRuns.saveStudioRun(checked.runs[0]!);
     }),
+  );
+  ipcMain.handle(desktopIpc.recordStudioCorrection, (event, rawInput: unknown) =>
+    run(event, () =>
+      owners.studioRuns.recordStudioCorrection(expectRecordStudioCorrectionInput(rawInput)),
+    ),
   );
   ipcMain.handle(desktopIpc.confirmStudioExternalReview, (event, rawInput: unknown) =>
     run(event, () =>

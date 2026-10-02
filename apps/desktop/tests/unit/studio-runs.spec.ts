@@ -518,6 +518,89 @@ test.describe("Studio run plan state", () => {
     ).toThrow("revision sequence");
   });
 
+  test("model saves cannot create or rewrite Matthew correction history", () => {
+    const prepared = recordStudioCorrection(run, {
+      id: "correction-1",
+      instruction: "Add a recovery check to the remaining work.",
+      affectedMilestoneIds: ["m2"],
+      now: "2026-09-29T00:00:00.000Z",
+    });
+    expect(() => preserveStudioRunHistory(run, prepared)).toThrow("authorised UI path");
+    expect(preserveStudioRunHistory(run, prepared, "matthew-correction").corrections).toEqual(
+      prepared.corrections,
+    );
+    expect(() =>
+      preserveStudioRunHistory(prepared, {
+        ...prepared,
+        corrections: [],
+        specificationRevision: 1,
+      }),
+    ).toThrow("cannot be deleted");
+    expect(() =>
+      preserveStudioRunHistory(prepared, {
+        ...prepared,
+        corrections: [
+          { ...prepared.corrections![0]!, instruction: "Replace the original request." },
+        ],
+      }),
+    ).toThrow("history is immutable");
+    expect(() =>
+      preserveStudioRunHistory(prepared, {
+        ...prepared,
+        corrections: [{ ...prepared.corrections![0]!, status: "applied" }],
+      }),
+    ).toThrow("follow its lifecycle");
+    expect(
+      preserveStudioRunHistory(prepared, {
+        ...prepared,
+        corrections: [{ ...prepared.corrections![0]!, status: "sent" }],
+      }).corrections?.[0]?.status,
+    ).toBe("sent");
+    const sent = {
+      ...prepared,
+      corrections: [{ ...prepared.corrections![0]!, status: "sent" as const }],
+    };
+    expect(() =>
+      preserveStudioRunHistory(sent, {
+        ...sent,
+        corrections: [{ ...sent.corrections[0]!, status: "applied" }],
+      }),
+    ).toThrow("reconciliation summary");
+    const appliedCorrection = {
+      ...sent.corrections[0]!,
+      status: "applied" as const,
+      reconciliationSummary: "Replanned the remaining two milestones after inspecting active work.",
+    };
+    expect(() =>
+      preserveStudioRunHistory(sent, { ...sent, corrections: [appliedCorrection] }),
+    ).toThrow("must be completed or cancelled");
+    const reconciled = {
+      ...sent,
+      corrections: [appliedCorrection],
+      milestones: [sent.milestones[0]!, { ...sent.milestones[1]!, status: "cancelled" as const }],
+    };
+    const applied = preserveStudioRunHistory(sent, reconciled);
+    expect(
+      decodeStudioRunsFile({ version: 1, runs: [applied] }).runs[0]?.corrections?.[0],
+    ).toMatchObject({
+      status: "applied",
+      reconciliationSummary: "Replanned the remaining two milestones after inspecting active work.",
+    });
+    expect(() =>
+      preserveStudioRunHistory(applied, {
+        ...applied,
+        corrections: [{ ...applied.corrections![0]!, reconciliationSummary: "Rewrite history." }],
+      }),
+    ).toThrow("history is immutable");
+    const legacyApplied = {
+      ...prepared,
+      corrections: [{ ...prepared.corrections![0]!, status: "applied" as const }],
+    };
+    expect(
+      decodeStudioRunsFile({ version: 1, runs: [legacyApplied] }).runs[0]?.corrections?.[0]?.status,
+    ).toBe("applied");
+  });
+
   test("rejects unknown persisted keys and invalid dependency references", () => {
     const file = { version: 1, runs: [run] };
     expect(decodeStudioRunsFile(file).runs).toEqual([

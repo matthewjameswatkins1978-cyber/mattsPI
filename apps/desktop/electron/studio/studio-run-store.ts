@@ -210,7 +210,15 @@ function decodeCorrection(value: unknown, at: string): StudioCorrection {
   if (!record(value)) throw new Error(`Invalid ${at}`);
   keys(
     value,
-    ["id", "specificationRevision", "instruction", "affectedMilestoneIds", "status", "recordedAt"],
+    [
+      "id",
+      "specificationRevision",
+      "instruction",
+      "affectedMilestoneIds",
+      "status",
+      "reconciliationSummary",
+      "recordedAt",
+    ],
     at,
   );
   if (
@@ -228,6 +236,9 @@ function decodeCorrection(value: unknown, at: string): StudioCorrection {
     instruction: text(value.instruction, `${at}.instruction`),
     affectedMilestoneIds: stringList(value.affectedMilestoneIds, `${at}.affectedMilestoneIds`),
     status: value.status as StudioCorrection["status"],
+    ...(optionalText(value.reconciliationSummary, `${at}.reconciliationSummary`)
+      ? { reconciliationSummary: value.reconciliationSummary as string }
+      : {}),
     recordedAt: text(value.recordedAt, `${at}.recordedAt`),
   };
 }
