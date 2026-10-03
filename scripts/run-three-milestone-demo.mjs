@@ -133,7 +133,11 @@ test('add returns the sum of two positive integers', () => {
   console.log("=== EXECUTING MILESTONE 1: Foundation (Addition) ===");
   plan.milestones[0].status = "running";
   const m1WorktreePath = join(tmpdir(), `mwstudio-wt-m1-${Date.now()}`);
-  await run("git", ["worktree", "add", "-b", "studio/m1-foundation", m1WorktreePath, "main"], demoDir);
+  await run(
+    "git",
+    ["worktree", "add", "-b", "studio/m1-foundation", m1WorktreePath, "main"],
+    demoDir,
+  );
   plan.milestones[0].worktreeIds = [m1WorktreePath];
   plan.milestones[0].workerThreadIds = ["worker-m1"];
   console.log(`   [Implementer] Dispatched to isolated worktree: ${m1WorktreePath}`);
@@ -155,10 +159,18 @@ test('add returns the sum of two positive integers', () => {
   // Independent Inspector
   plan.milestones[0].status = "verifying";
   plan.milestones[0].workerThreadIds.push("inspector-m1");
-  console.log("   [Independent Inspector] Dispatched: inspecting diff and running tests independently...");
+  console.log(
+    "   [Independent Inspector] Dispatched: inspecting diff and running tests independently...",
+  );
   const m1Diff = await run("git", ["diff", "main..HEAD"], m1WorktreePath);
   const m1InspectorTest = await run("node", ["--test"], m1WorktreePath);
-  console.log("   [Independent Inspector] Diff verified:\n" + m1Diff.split("\n").map(l => "     " + l).join("\n"));
+  console.log(
+    "   [Independent Inspector] Diff verified:\n" +
+      m1Diff
+        .split("\n")
+        .map((l) => "     " + l)
+        .join("\n"),
+  );
   console.log("   [Independent Inspector] Verdict: PASS (All checks clean).");
 
   // Merge into main
@@ -174,10 +186,16 @@ test('add returns the sum of two positive integers', () => {
   // Milestone 2 Execution (Unblocked by M1)
   // -------------------------------------------------------------
   console.log("=== EXECUTING MILESTONE 2: Multiplication (Dependent on M1) ===");
-  console.log("   [Coordinator] Evaluated dependency graph: M1 is complete -> M2 is now UNBLOCKED.");
+  console.log(
+    "   [Coordinator] Evaluated dependency graph: M1 is complete -> M2 is now UNBLOCKED.",
+  );
   plan.milestones[1].status = "running";
   const m2WorktreePath = join(tmpdir(), `mwstudio-wt-m2-${Date.now()}`);
-  await run("git", ["worktree", "add", "-b", "studio/m2-multiplication", m2WorktreePath, "main"], demoDir);
+  await run(
+    "git",
+    ["worktree", "add", "-b", "studio/m2-multiplication", m2WorktreePath, "main"],
+    demoDir,
+  );
   plan.milestones[1].worktreeIds = [m2WorktreePath];
   plan.milestones[1].workerThreadIds = ["worker-m2"];
   console.log(`   [Implementer] Dispatched to isolated worktree: ${m2WorktreePath}`);
@@ -210,17 +228,29 @@ test('multiply returns the product of two positive integers', () => {
   console.log("   [Implementer] Tests executed and passed in worktree.");
 
   await run("git", ["add", "-A"], m2WorktreePath);
-  await run("git", ["commit", "-m", "feat(math): add multiplication function and tests"], m2WorktreePath);
+  await run(
+    "git",
+    ["commit", "-m", "feat(math): add multiplication function and tests"],
+    m2WorktreePath,
+  );
   const m2WorkerSha = await run("git", ["rev-parse", "HEAD"], m2WorktreePath);
   console.log(`   [Implementer] Committed: ${m2WorkerSha.slice(0, 7)}`);
 
   // Independent Inspector
   plan.milestones[1].status = "verifying";
   plan.milestones[1].workerThreadIds.push("inspector-m2");
-  console.log("   [Independent Inspector] Dispatched: inspecting diff and running tests independently...");
+  console.log(
+    "   [Independent Inspector] Dispatched: inspecting diff and running tests independently...",
+  );
   const m2Diff = await run("git", ["diff", "main..HEAD"], m2WorktreePath);
   await run("node", ["--test"], m2WorktreePath);
-  console.log("   [Independent Inspector] Diff verified:\n" + m2Diff.split("\n").map(l => "     " + l).join("\n"));
+  console.log(
+    "   [Independent Inspector] Diff verified:\n" +
+      m2Diff
+        .split("\n")
+        .map((l) => "     " + l)
+        .join("\n"),
+  );
   console.log("   [Independent Inspector] Verdict: PASS (Multiplication verified).");
 
   // Merge into main
@@ -238,7 +268,11 @@ test('multiply returns the product of two positive integers', () => {
   console.log("=== EXECUTING MILESTONE 3: Formatter (Independent Tooling) ===");
   plan.milestones[2].status = "running";
   const m3WorktreePath = join(tmpdir(), `mwstudio-wt-m3-${Date.now()}`);
-  await run("git", ["worktree", "add", "-b", "studio/m3-formatter", m3WorktreePath, "main"], demoDir);
+  await run(
+    "git",
+    ["worktree", "add", "-b", "studio/m3-formatter", m3WorktreePath, "main"],
+    demoDir,
+  );
   plan.milestones[2].worktreeIds = [m3WorktreePath];
   plan.milestones[2].workerThreadIds = ["worker-m3"];
   console.log(`   [Implementer] Dispatched to isolated worktree: ${m3WorktreePath}`);
@@ -264,17 +298,29 @@ test('formatExpression formats basic equations correctly', () => {
   console.log("   [Implementer] Tests executed and passed in worktree.");
 
   await run("git", ["add", "-A"], m3WorktreePath);
-  await run("git", ["commit", "-m", "feat(format): add expression formatting utility and tests"], m3WorktreePath);
+  await run(
+    "git",
+    ["commit", "-m", "feat(format): add expression formatting utility and tests"],
+    m3WorktreePath,
+  );
   const m3WorkerSha = await run("git", ["rev-parse", "HEAD"], m3WorktreePath);
   console.log(`   [Implementer] Committed: ${m3WorkerSha.slice(0, 7)}`);
 
   // Independent Inspector
   plan.milestones[2].status = "verifying";
   plan.milestones[2].workerThreadIds.push("inspector-m3");
-  console.log("   [Independent Inspector] Dispatched: inspecting diff and running tests independently...");
+  console.log(
+    "   [Independent Inspector] Dispatched: inspecting diff and running tests independently...",
+  );
   const m3Diff = await run("git", ["diff", "main..HEAD"], m3WorktreePath);
   await run("node", ["--test"], m3WorktreePath);
-  console.log("   [Independent Inspector] Diff verified:\n" + m3Diff.split("\n").map(l => "     " + l).join("\n"));
+  console.log(
+    "   [Independent Inspector] Diff verified:\n" +
+      m3Diff
+        .split("\n")
+        .map((l) => "     " + l)
+        .join("\n"),
+  );
   console.log("   [Independent Inspector] Verdict: PASS (Formatter utility verified).");
 
   // Merge into main
@@ -311,7 +357,7 @@ test('formatExpression formats basic equations correctly', () => {
   console.log(`   Run ID: ${plan.id}`);
   console.log(`   Status: ${plan.status}`);
   console.log(`   Final Revision: ${plan.revision}`);
-  console.log(`   Milestones: ${plan.milestones.map(m => `${m.id} (${m.status})`).join(", ")}`);
+  console.log(`   Milestones: ${plan.milestones.map((m) => `${m.id} (${m.status})`).join(", ")}`);
   console.log(`\nDemonstration repository preserved at:\n${demoDir}`);
 }
 

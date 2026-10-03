@@ -618,9 +618,7 @@ test.describe("Studio run plan state", () => {
       milestones: [m1Accepted, runMerged.milestones[1]!, runMerged.milestones[2]!],
       revision: runMerged.revision + 1,
     };
-    expect(
-      availableStudioMilestones(runAccepted).map(({ id }) => id),
-    ).toEqual(["m2", "m3"]);
+    expect(availableStudioMilestones(runAccepted).map(({ id }) => id)).toEqual(["m2", "m3"]);
 
     // 4. Explicitly local-only milestones: normal local dependency progression remains possible
     const localRun: StudioRun = {
