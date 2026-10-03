@@ -1,9 +1,9 @@
 name: Release
 
+# Cross-platform release automation is parked until there is an actual desktop release target.
+# It can only be invoked deliberately.
 on:
-  push:
-    tags:
-      - "v[0-9]*"
+  workflow_dispatch:
 
 permissions:
   contents: read
