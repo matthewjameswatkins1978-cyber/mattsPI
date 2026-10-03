@@ -309,6 +309,32 @@ export function StudioRunsView({
     }
   };
 
+  const reconcileRunNow = async (run: StudioRun) => {
+    const withPr = run.milestones.filter(
+      (milestone) =>
+        milestone.githubCheckpoints?.at(-1)?.pullRequestUrl ?? milestone.pullRequestUrl,
+    );
+    if (withPr.length === 0) return;
+    setBusyRunId(run.id);
+    setError(undefined);
+    try {
+      for (const milestone of withPr) {
+        await updateSnapshot(setSnapshot, () =>
+          api.reconcileStudioGitHubPullRequest({
+            runId: run.id,
+            milestoneId: milestone.id,
+          }),
+        );
+      }
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Studio could not reconcile this run from GitHub.",
+      );
+    } finally {
+      setBusyRunId(undefined);
+    }
+  };
+
   return (
     <section className="canvas studio-runs-view" data-testid="studio-runs-view">
       <header className="view-header">
@@ -660,34 +686,7 @@ export function StudioRunsView({
                     className="button"
                     disabled={Boolean(busyRunId)}
                     onClick={() => {
-                      const withPr = run.milestones.filter(
-                        (milestone) =>
-                          milestone.githubCheckpoints?.at(-1)?.pullRequestUrl ??
-                          milestone.pullRequestUrl,
-                      );
-                      if (withPr.length === 0) return;
-                      setBusyRunId(run.id);
-                      setError(undefined);
-                      void (async () => {
-                        try {
-                          for (const milestone of withPr) {
-                            await updateSnapshot(setSnapshot, () =>
-                              api.reconcileStudioGitHubPullRequest({
-                                runId: run.id,
-                                milestoneId: milestone.id,
-                              }),
-                            );
-                          }
-                        } catch (cause) {
-                          setError(
-                            cause instanceof Error
-                              ? cause.message
-                              : "Studio could not reconcile this run from GitHub.",
-                          );
-                        } finally {
-                          setBusyRunId(undefined);
-                        }
-                      })();
+                      reconcileRunNow(run).catch(() => undefined);
                     }}
                     type="button"
                   >
