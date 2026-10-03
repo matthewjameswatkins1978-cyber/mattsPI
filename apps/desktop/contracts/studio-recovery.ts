@@ -23,11 +23,7 @@ export type StudioRecoveryDisposition =
   | "recovery-required"
   | "historical";
 
-export type StudioWorkerPresence =
-  | "live"
-  | "historical"
-  | "missing-active"
-  | "unknown-legacy";
+export type StudioWorkerPresence = "live" | "historical" | "missing-active" | "unknown-legacy";
 
 /** Minimal structural view of a child record; avoids a contracts cycle. */
 export interface StudioRecoveryChild {
@@ -44,17 +40,11 @@ export const STUDIO_RESTART_RECOVERY_NOTE =
 
 const LIVE_CHILD_STATUSES: readonly string[] = ["queued", "running", "waiting"];
 
-function childMatchesWorker(
-  child: StudioRecoveryChild,
-  run: StudioRun,
-  workerId: string,
-): boolean {
+function childMatchesWorker(child: StudioRecoveryChild, run: StudioRun, workerId: string): boolean {
   return (
     child.parentWorkspaceId === run.workspaceId &&
     child.parentSessionId === (run.coordinatorSessionId ?? child.parentSessionId) &&
-    (child.id === workerId ||
-      child.childSessionId === workerId ||
-      child.taskId === workerId)
+    (child.id === workerId || child.childSessionId === workerId || child.taskId === workerId)
   );
 }
 
@@ -90,7 +80,10 @@ export function resolveStudioWorkerPresence(
 }
 
 /** Human wording for a worker row; historical work is normal, missing work is a signal. */
-export function studioWorkerPresenceLabel(presence: StudioWorkerPresence, workerId: string): string {
+export function studioWorkerPresenceLabel(
+  presence: StudioWorkerPresence,
+  workerId: string,
+): string {
   switch (presence) {
     case "live":
       return workerId;
@@ -147,7 +140,8 @@ export function deriveStudioMilestoneRecovery(
   }
 
   if (isTerminalMilestone(milestone)) return "settled";
-  if (milestone.status === "repair-needed" || milestone.status === "blocked") return "repair-needed";
+  if (milestone.status === "repair-needed" || milestone.status === "blocked")
+    return "repair-needed";
   if (isOpenMilestone(milestone)) return hasLiveWorker ? "active" : "recovery-required";
   return "recovery-required";
 }
@@ -211,9 +205,7 @@ export function deriveStudioRunRecovery(
               ? "settled"
               : "historical";
 
-  const head = run.milestones
-    .map((milestone) => milestoneHeadShort(milestone))
-    .find(Boolean);
+  const head = run.milestones.map((milestone) => milestoneHeadShort(milestone)).find(Boolean);
   const headSuffix = head ? ` · HEAD ${head}` : "";
   switch (pick) {
     case "active":
@@ -273,10 +265,7 @@ export interface StudioRestartReconcileContext {
   readonly knownWorkerIds: ReadonlySet<string>;
 }
 
-function runHasLiveWork(
-  run: StudioRun,
-  context: StudioRestartReconcileContext,
-): boolean {
+function runHasLiveWork(run: StudioRun, context: StudioRestartReconcileContext): boolean {
   return run.milestones
     .filter((milestone) => isOpenMilestone(milestone))
     .some((milestone) =>

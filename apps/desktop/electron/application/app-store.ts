@@ -1578,19 +1578,20 @@ export class DesktopAppStore {
   ): Promise<void> {
     if (!this.studioRunsWritable) return;
     const liveChildren = this.state.orchestrationChildren.filter(
-      (child) => child.status === "queued" || child.status === "running" || child.status === "waiting",
+      (child) =>
+        child.status === "queued" || child.status === "running" || child.status === "waiting",
     );
     const knownWorkerIds = new Set<string>(
       this.state.orchestrationChildren.flatMap((child) =>
-        [child.id, child.childSessionId, child.taskId].filter(
-          (entry): entry is string => Boolean(entry),
+        [child.id, child.childSessionId, child.taskId].filter((entry): entry is string =>
+          Boolean(entry),
         ),
       ),
     );
-    let runs = reconcileStudioRunsForRestart(
-      this.state.studioRuns,
-      { liveChildren, knownWorkerIds },
-    );
+    let runs = reconcileStudioRunsForRestart(this.state.studioRuns, {
+      liveChildren,
+      knownWorkerIds,
+    });
     // Refresh recorded GitHub checkpoints where credentials/network permit. Each
     // observation is bound to its exact checkpoint SHA; failures keep saved state.
     const refreshed = await Promise.all(
@@ -1625,7 +1626,10 @@ export class DesktopAppStore {
       }),
     );
     runs = refreshed;
-    if (runs !== this.state.studioRuns && runs.some((run, index) => run !== this.state.studioRuns[index])) {
+    if (
+      runs !== this.state.studioRuns &&
+      runs.some((run, index) => run !== this.state.studioRuns[index])
+    ) {
       this.state = { ...this.state, studioRuns: [...runs] };
       try {
         await writeStudioRunsFile(this.studioRunsFilePath, {

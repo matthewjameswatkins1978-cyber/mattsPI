@@ -16,7 +16,8 @@ function liveChildrenOf(
   children: readonly OrchestrationChildThread[],
 ): readonly OrchestrationChildThread[] {
   return children.filter(
-    (child) => child.status === "queued" || child.status === "running" || child.status === "waiting",
+    (child) =>
+      child.status === "queued" || child.status === "running" || child.status === "waiting",
   );
 }
 
@@ -35,10 +36,15 @@ export function studioRunWorkerRows(
       entry.parentSessionId === run.coordinatorSessionId,
   );
   const known = new Set(
-    owned.flatMap((entry) => [entry.id, entry.childSessionId, entry.taskId].filter(Boolean) as string[]),
+    owned.flatMap(
+      (entry) => [entry.id, entry.childSessionId, entry.taskId].filter(Boolean) as string[],
+    ),
   );
-  const terminalWork = milestone.status === "complete" || milestone.status === "cancelled" ||
-    run.status === "completed" || run.status === "stopped";
+  const terminalWork =
+    milestone.status === "complete" ||
+    milestone.status === "cancelled" ||
+    run.status === "completed" ||
+    run.status === "stopped";
   return milestone.workerThreadIds.map((workerId) => {
     const child = children.find(
       (entry) =>

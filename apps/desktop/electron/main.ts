@@ -242,12 +242,13 @@ function createStoreBackedOrchestrationRuntimeBridge(): OrchestrationRuntimeBrid
       // Host-reconciled state: the agent reads dispositions and next actions, it does
       // not mechanically rediscover them from threads, Git and checkpoints.
       const liveChildren = snapshot.orchestrationChildren.filter(
-        (child) => child.status === "queued" || child.status === "running" || child.status === "waiting",
+        (child) =>
+          child.status === "queued" || child.status === "running" || child.status === "waiting",
       );
       const knownWorkerIds = new Set<string>(
         snapshot.orchestrationChildren.flatMap((child) =>
-          [child.id, child.childSessionId, child.taskId].filter(
-            (entry): entry is string => Boolean(entry),
+          [child.id, child.childSessionId, child.taskId].filter((entry): entry is string =>
+            Boolean(entry),
           ),
         ),
       );

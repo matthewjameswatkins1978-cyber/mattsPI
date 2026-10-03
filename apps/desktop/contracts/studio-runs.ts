@@ -234,10 +234,7 @@ export function recordStudioGitHubMerge(
   };
 }
 
-function reviewTargetsCheckpoint(
-  reviewedHeadSha: string,
-  checkpointHeadSha: string,
-): boolean {
+function reviewTargetsCheckpoint(reviewedHeadSha: string, checkpointHeadSha: string): boolean {
   return reviewedHeadSha.toLowerCase() === checkpointHeadSha.toLowerCase();
 }
 

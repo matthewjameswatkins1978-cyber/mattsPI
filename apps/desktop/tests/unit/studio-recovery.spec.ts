@@ -81,9 +81,7 @@ test.describe("Studio restart reconciliation", () => {
     const ms = milestone({ status: "running", workerThreadIds: ["worker-1"] });
     const target = run({ status: "running", milestones: [ms] });
     const live = [child({})];
-    expect(deriveStudioRunRecovery(target, live, new Set(["worker-1"])).disposition).toBe(
-      "active",
-    );
+    expect(deriveStudioRunRecovery(target, live, new Set(["worker-1"])).disposition).toBe("active");
     const reconciled = reconcileStudioRunsForRestart(
       [target],
       { liveChildren: live, knownWorkerIds: new Set(["worker-1"]) },
@@ -184,10 +182,10 @@ test.describe("Studio restart reconciliation", () => {
   test("terminal runs are unchanged by reconciliation", () => {
     const completed = run({ status: "completed" });
     const stopped = run({ status: "stopped" });
-    const reconciled = reconcileStudioRunsForRestart(
-      [completed, stopped],
-      { liveChildren: [], knownWorkerIds: new Set() },
-    );
+    const reconciled = reconcileStudioRunsForRestart([completed, stopped], {
+      liveChildren: [],
+      knownWorkerIds: new Set(),
+    });
     expect(reconciled[0]).toBe(completed);
     expect(reconciled[1]).toBe(stopped);
     expect(deriveStudioRunRecovery(completed, [], new Set()).disposition).toBe("settled");
@@ -246,10 +244,10 @@ test.describe("Studio restart reconciliation", () => {
     expect(recovery.disposition).toBe("historical");
     expect(recovery.canResumeImplementation).toBe(false);
     // No worker is dispatched by reconciliation itself.
-    const reconciled = reconcileStudioRunsForRestart(
-      [w2],
-      { liveChildren: [], knownWorkerIds: new Set(["gone-worker-1"]) },
-    );
+    const reconciled = reconcileStudioRunsForRestart([w2], {
+      liveChildren: [],
+      knownWorkerIds: new Set(["gone-worker-1"]),
+    });
     expect(reconciled[0]).toBe(w2);
   });
 
