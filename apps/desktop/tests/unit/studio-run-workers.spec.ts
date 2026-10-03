@@ -66,8 +66,8 @@ test("Studio resolves exact worker route and worktree only within the owning coo
   const rows = studioRunWorkerRows(run, milestone, [owned, otherRun]);
 
   expect(rows).toEqual([
-    { workerId: "worker-1", child: owned },
-    { workerId: "unloaded-worker", child: undefined },
+    { workerId: "worker-1", child: owned, presence: "live" },
+    { workerId: "unloaded-worker", child: undefined, presence: "unknown-legacy" },
   ]);
   expect(rows[0]?.child).toMatchObject({
     role: "IMPLEMENTER",

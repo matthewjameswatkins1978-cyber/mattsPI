@@ -78,12 +78,12 @@ import {
   STUDIO_RUNS_FILE_VERSION,
   applyStudioGitHubPullRequestObservation,
   preserveStudioRunHistory,
-  recoverStudioRunsAfterRestart,
   recordStudioCorrection as appendStudioCorrection,
   recordStudioGitHubReview,
   transitionStudioMilestone,
   transitionStudioRun,
 } from "../../contracts/studio-runs";
+import { reconcileStudioRunsForRestart } from "../../contracts/studio-recovery";
 import {
   assertStudioCompletionWithReconciliation,
   resolveStudioEvidenceWaitMs,
@@ -1567,6 +1567,82 @@ export class DesktopAppStore {
     return this.persistStudioRun(updatedRun, "github-observer");
   }
 
+  /**
+   * Host-side startup reconciliation shared by automatic restart recovery and any
+   * manual "Reconcile now" trigger: pause only runs with no live execution, refresh
+   * recorded GitHub checkpoints best-effort, then persist once. Never dispatches
+   * workers, never rewrites checkpoint history, never fabricates acceptance.
+   */
+  private async reconcileStudioRunsAfterStartup(
+    startupDiagnostics: { scope: string; message: string }[],
+  ): Promise<void> {
+    if (!this.studioRunsWritable) return;
+    const liveChildren = this.state.orchestrationChildren.filter(
+      (child) => child.status === "queued" || child.status === "running" || child.status === "waiting",
+    );
+    const knownWorkerIds = new Set<string>(
+      this.state.orchestrationChildren.flatMap((child) =>
+        [child.id, child.childSessionId, child.taskId].filter(
+          (entry): entry is string => Boolean(entry),
+        ),
+      ),
+    );
+    let runs = reconcileStudioRunsForRestart(
+      this.state.studioRuns,
+      { liveChildren, knownWorkerIds },
+    );
+    // Refresh recorded GitHub checkpoints where credentials/network permit. Each
+    // observation is bound to its exact checkpoint SHA; failures keep saved state.
+    const refreshed = await Promise.all(
+      runs.map(async (run) => {
+        if (run.status === "completed" || run.status === "stopped") return run;
+        let updated = run;
+        for (const milestone of run.milestones) {
+          const pullRequestUrl =
+            milestone.githubCheckpoints?.at(-1)?.pullRequestUrl ?? milestone.pullRequestUrl;
+          if (!pullRequestUrl) continue;
+          try {
+            const observation = await readStudioGitHubPullRequest(
+              run.repositoryPath,
+              pullRequestUrl,
+            );
+            const next = applyStudioGitHubPullRequestObservation(milestone, observation);
+            if (next !== milestone) {
+              updated = {
+                ...updated,
+                milestones: updated.milestones.map((entry) =>
+                  entry.id === milestone.id ? next : entry,
+                ),
+                updatedAt: observation.observedAt,
+                revision: updated.revision + 1,
+              };
+            }
+          } catch {
+            // Honest partial reconciliation: retain saved state, do not invent PR truth.
+          }
+        }
+        return updated;
+      }),
+    );
+    runs = refreshed;
+    if (runs !== this.state.studioRuns && runs.some((run, index) => run !== this.state.studioRuns[index])) {
+      this.state = { ...this.state, studioRuns: [...runs] };
+      try {
+        await writeStudioRunsFile(this.studioRunsFilePath, {
+          version: STUDIO_RUNS_FILE_VERSION,
+          runs,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.studioRunsWritable = false;
+        startupDiagnostics.push({
+          scope: "application",
+          message: `Studio restart reconciliation is active in memory but could not be saved: ${message}`,
+        });
+      }
+    }
+  }
+
   async setSidebarCollapsed(sidebarCollapsed: boolean): Promise<DesktopAppState> {
     await this.initialize();
     if (this.state.sidebarCollapsed === sidebarCollapsed) {
@@ -2230,26 +2306,12 @@ export class DesktopAppStore {
       });
     }
 
+    // Load durable Studio intent/history first without reconciling: dispositions are
+    // derived only after workspaces, sessions and orchestration history are loaded below.
     try {
       const loadedRuns = await readStudioRunsFile(this.studioRunsFilePath);
-      const recoveredRuns = recoverStudioRunsAfterRestart(loadedRuns.runs);
-      this.state = { ...this.state, studioRuns: [...recoveredRuns] };
+      this.state = { ...this.state, studioRuns: [...loadedRuns.runs] };
       this.studioRunsWritable = true;
-      if (recoveredRuns !== loadedRuns.runs) {
-        try {
-          await writeStudioRunsFile(this.studioRunsFilePath, {
-            version: STUDIO_RUNS_FILE_VERSION,
-            runs: recoveredRuns,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          this.studioRunsWritable = false;
-          startupDiagnostics.push({
-            scope: "application",
-            message: `Studio restart recovery is active in memory but could not be saved: ${message}`,
-          });
-        }
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[app-store] studio-runs.json is invalid; Studio persistence disabled", error);
@@ -2296,6 +2358,11 @@ export class DesktopAppStore {
         hydrateSelectedSession: false,
         markSelectedSessionViewed: false,
       });
+      // Evidence-first restart reconciliation, in dependency order: durable runs are
+      // already loaded; sessions and persisted orchestration history are now live, so
+      // derive dispositions, refresh recorded GitHub checkpoints where safe, and only
+      // then publish. Observation first: this never dispatches workers.
+      await this.reconcileStudioRunsAfterStartup(startupDiagnostics);
       // Startup GC of leaked pi/* worktrees and branches; self-contained and
       // error-swallowing, so fire-and-forget without blocking initialization.
       void this.workspaceOwner.reconcileWorktrees().catch((error: unknown) => {

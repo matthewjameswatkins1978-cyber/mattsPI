@@ -5,6 +5,10 @@ import {
   studioExternalReviewStatus,
   transitionStudioRun,
 } from "../../../contracts/studio-runs";
+import {
+  deriveStudioRunRecovery,
+  studioWorkerPresenceLabel,
+} from "../../../contracts/studio-recovery";
 import type {
   DesktopAppState,
   OrchestrationChildThread,
@@ -86,6 +90,16 @@ export function StudioRunsView({
   const visibleRuns = useMemo(
     () => runs.filter((run) => run.workspaceId === workspaceId),
     [runs, workspaceId],
+  );
+  const reconciledRuns = useMemo(
+    () =>
+      visibleRuns
+        .map((run) => ({
+          run,
+          recovery: deriveStudioRunRecovery(run, orchestrationChildren),
+        }))
+        .sort((a, b) => Number(a.recovery.inHistory) - Number(b.recovery.inHistory)),
+    [visibleRuns, orchestrationChildren],
   );
 
   const save = async (run: StudioRun) => {
@@ -396,7 +410,7 @@ export function StudioRunsView({
           {workspace && visibleRuns.length === 0 ? (
             <p>No plans recorded for this project yet.</p>
           ) : null}
-          {visibleRuns.map((run) => (
+          {reconciledRuns.map(({ run, recovery }) => (
             <article className="studio-card studio-run" data-testid="studio-run" key={run.id}>
               <div className="studio-run__heading">
                 <div>
@@ -407,6 +421,8 @@ export function StudioRunsView({
                     {(run.deliveryPolicy ?? "github-pr") === "local"
                       ? "Local-only delivery"
                       : "GitHub PR delivery"}
+                    {" · "}
+                    {recovery.inHistory ? "History" : "Active"} · {recovery.summary}
                   </p>
                 </div>
                 <span className="studio-run__revision">Revision {run.revision}</span>
@@ -449,9 +465,9 @@ export function StudioRunsView({
                           className="studio-run__workers"
                           aria-label={`${milestone.title} workers`}
                         >
-                          {workers.map(({ workerId, child }) => (
+                          {workers.map(({ workerId, child, presence }) => (
                             <li className="studio-run__worker" key={workerId}>
-                              {child ? (
+                              {presence === "live" && child ? (
                                 <>
                                   <strong>{child.role ?? "Role not recorded"}</strong>
                                   <span>
@@ -496,7 +512,7 @@ export function StudioRunsView({
                                   </button>
                                 </>
                               ) : (
-                                <span>Worker details not loaded · {workerId}</span>
+                                <span>{studioWorkerPresenceLabel(presence, workerId)}</span>
                               )}
                             </li>
                           ))}
@@ -609,7 +625,8 @@ export function StudioRunsView({
                   </div>
                 ) : null}
                 {(run.status === "draft" || run.status === "paused" || run.status === "blocked") &&
-                run.mode === "observed" ? (
+                run.mode === "observed" &&
+                recovery.canResumeImplementation ? (
                   <button
                     className="button"
                     disabled={
@@ -636,6 +653,45 @@ export function StudioRunsView({
                     type="button"
                   >
                     Pause new dispatch
+                  </button>
+                ) : null}
+                {run.status !== "stopped" && run.status !== "completed" ? (
+                  <button
+                    className="button"
+                    disabled={Boolean(busyRunId)}
+                    onClick={() => {
+                      const withPr = run.milestones.filter(
+                        (milestone) =>
+                          milestone.githubCheckpoints?.at(-1)?.pullRequestUrl ??
+                          milestone.pullRequestUrl,
+                      );
+                      if (withPr.length === 0) return;
+                      setBusyRunId(run.id);
+                      setError(undefined);
+                      void (async () => {
+                        try {
+                          for (const milestone of withPr) {
+                            await updateSnapshot(setSnapshot, () =>
+                              api.reconcileStudioGitHubPullRequest({
+                                runId: run.id,
+                                milestoneId: milestone.id,
+                              }),
+                            );
+                          }
+                        } catch (cause) {
+                          setError(
+                            cause instanceof Error
+                              ? cause.message
+                              : "Studio could not reconcile this run from GitHub.",
+                          );
+                        } finally {
+                          setBusyRunId(undefined);
+                        }
+                      })();
+                    }}
+                    type="button"
+                  >
+                    Reconcile now
                   </button>
                 ) : null}
                 {run.status !== "stopped" && run.status !== "completed" ? (

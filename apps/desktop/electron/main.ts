@@ -46,6 +46,7 @@ import { listWorkspaceFiles, readWorkspaceFile } from "./platform/files/app-stor
 import { resolveExistingWorkspacePath } from "./platform/files/workspace-paths";
 import { resolveRepoWorkspaceId } from "../contracts/workspace-roots";
 import type { StudioRun } from "../contracts/studio-runs";
+import { deriveStudioRunRecovery } from "../contracts/studio-recovery";
 import { MAIN_DEV_RELOAD_MARKER } from "./dev-reload-main-probe";
 import { NotificationManager } from "./platform/notification-manager";
 import { NotificationPermissionService } from "./platform/notification-permission";
@@ -227,7 +228,8 @@ function createStoreBackedOrchestrationRuntimeBridge(): OrchestrationRuntimeBrid
       await store.initialize();
       const sessionRef = sessionRefFromExtensionContext(ctx);
       const runs = await store.listStudioRuns(sessionRef.workspaceId);
-      const workspaces = store.snapshot().workspaces;
+      const snapshot = store.snapshot();
+      const workspaces = snapshot.workspaces;
       const rootWorkspaceId = resolveRepoWorkspaceId(workspaces, sessionRef.workspaceId);
       const rootWorkspace = workspaces.find(({ id }) => id === rootWorkspaceId);
       if (!rootWorkspace) {
@@ -237,9 +239,46 @@ function createStoreBackedOrchestrationRuntimeBridge(): OrchestrationRuntimeBrid
         workspaceId: rootWorkspace.id,
         repositoryPath: rootWorkspace.path,
       };
+      // Host-reconciled state: the agent reads dispositions and next actions, it does
+      // not mechanically rediscover them from threads, Git and checkpoints.
+      const liveChildren = snapshot.orchestrationChildren.filter(
+        (child) => child.status === "queued" || child.status === "running" || child.status === "waiting",
+      );
+      const knownWorkerIds = new Set<string>(
+        snapshot.orchestrationChildren.flatMap((child) =>
+          [child.id, child.childSessionId, child.taskId].filter(
+            (entry): entry is string => Boolean(entry),
+          ),
+        ),
+      );
+      const reconciled = runs.map((run) => {
+        const recovery = deriveStudioRunRecovery(run, liveChildren, knownWorkerIds);
+        const openMilestones = run.milestones
+          .filter(({ status }) => status !== "complete" && status !== "cancelled")
+          .map(({ id, status }) => `${id}:${status}`);
+        return {
+          runId: run.id,
+          status: run.status,
+          disposition: recovery.disposition,
+          summary: recovery.summary,
+          canResumeImplementation: recovery.canResumeImplementation,
+          nextAction:
+            recovery.disposition === "settled" || recovery.disposition === "historical"
+              ? "No action: this work is settled history. Do not redispatch."
+              : recovery.disposition === "awaiting-review"
+                ? "No implementation worker required: waiting for review. Do not redispatch."
+                : recovery.disposition === "awaiting-merge"
+                  ? "No implementation worker required: accepted, awaiting merge."
+                  : recovery.disposition === "repair-needed"
+                    ? `Rework only: ${openMilestones.join(", ") || "see milestones"}.`
+                    : recovery.disposition === "active"
+                      ? "Work is live: do not duplicate workers."
+                      : `Continue only genuinely open work: ${openMilestones.join(", ") || "none"}. Do not replay settled milestones.`,
+        };
+      });
       return {
-        content: [{ type: "text", text: JSON.stringify({ project, runs }, null, 2) }],
-        details: { action: "pi_gui_list_studio_runs", project, runs },
+        content: [{ type: "text", text: JSON.stringify({ project, runs, reconciled }, null, 2) }],
+        details: { action: "pi_gui_list_studio_runs", project, runs, reconciled },
       };
     },
   };
