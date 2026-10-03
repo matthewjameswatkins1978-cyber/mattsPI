@@ -83,7 +83,10 @@ import {
   transitionStudioMilestone,
   transitionStudioRun,
 } from "../../contracts/studio-runs";
-import { reconcileStudioRunsForRestart } from "../../contracts/studio-recovery";
+import {
+  reconcileStudioRunsForRestart,
+  resolveLiveStudioRecoveryChildren,
+} from "../../contracts/studio-recovery";
 import {
   assertStudioCompletionWithReconciliation,
   resolveStudioEvidenceWaitMs,
@@ -1577,9 +1580,16 @@ export class DesktopAppStore {
     startupDiagnostics: { scope: string; message: string }[],
   ): Promise<void> {
     if (!this.studioRunsWritable) return;
-    const liveChildren = this.state.orchestrationChildren.filter(
-      (child) =>
-        child.status === "queued" || child.status === "running" || child.status === "waiting",
+    const currentSessions = this.state.workspaces.flatMap((workspace) =>
+      workspace.sessions.map((session) => ({
+        workspaceId: workspace.id,
+        sessionId: session.id,
+        status: session.status,
+      })),
+    );
+    const liveChildren = resolveLiveStudioRecoveryChildren(
+      this.state.orchestrationChildren,
+      currentSessions,
     );
     const knownWorkerIds = new Set<string>(
       this.state.orchestrationChildren.flatMap((child) =>

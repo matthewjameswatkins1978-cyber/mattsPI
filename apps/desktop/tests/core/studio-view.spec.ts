@@ -1,3 +1,5 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import {
   getDesktopState,
@@ -212,6 +214,58 @@ test("Studio Start submits to the prepared thread and records running only after
   }
 });
 
+async function persistStaleStudioWorker(
+  userDataDir: string,
+  workspaceId: string,
+  coordinatorId: string,
+) {
+  const workerId = "stale-persisted-worker";
+  const timestamp = new Date().toISOString();
+  const runsPath = join(userDataDir, "studio-runs.json");
+  const runFile = JSON.parse(await readFile(runsPath, "utf8")) as {
+    version: number;
+    runs: Array<{ milestones: unknown[] }>;
+  };
+  const run = runFile.runs[0];
+  if (!run) throw new Error("Expected the running Studio fixture to be persisted.");
+  run.milestones = [
+    {
+      id: "restart-worker-milestone",
+      title: "Restart worker fixture",
+      instruction: "Keep the stale worker identity across restart.",
+      dependsOn: [],
+      status: "running",
+      workerThreadIds: [workerId],
+      worktreeIds: [],
+      deliveryRequirement: "github-pr",
+      updatedAt: timestamp,
+    },
+  ];
+  await writeFile(runsPath, JSON.stringify(runFile, null, 2));
+
+  const uiStatePath = join(userDataDir, "ui-state.json");
+  const uiState = JSON.parse(await readFile(uiStatePath, "utf8")) as {
+    orchestrationChildren?: unknown[];
+  };
+  uiState.orchestrationChildren = [
+    {
+      id: workerId,
+      parentWorkspaceId: workspaceId,
+      parentSessionId: coordinatorId,
+      childWorkspaceId: workspaceId,
+      childSessionId: "session-absent-after-restart",
+      title: "Stale worker",
+      goal: "This saved worker has no current session.",
+      status: "running",
+      latestTranscript: "This saved worker has no current session.",
+      transcript: [],
+      evidence: [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  ];
+  await writeFile(uiStatePath, JSON.stringify(uiState, null, 2));
+}
 test("Studio restart pauses a saved running plan until explicit reconciliation and resume", async () => {
   test.setTimeout(90_000);
   const userDataDir = await makeUserDataDir();
@@ -249,6 +303,7 @@ test("Studio restart pauses a saved running plan until explicit reconciliation a
   } finally {
     await first.close();
   }
+  await persistStaleStudioWorker(userDataDir, workspaceId, coordinatorId);
 
   const second = await launchDesktop(userDataDir, {
     initialWorkspaces: [workspacePath],
@@ -261,6 +316,9 @@ test("Studio restart pauses a saved running plan until explicit reconciliation a
     await expect(window.getByTestId("studio-run-recovery-note")).toContainText(
       "Restart recovery required",
     );
+    await expect(
+      window.getByText(/Worker session unavailable · reconciliation required/),
+    ).toBeVisible();
     expect((await getDesktopState(window)).studioRuns[0]).toMatchObject({
       status: "paused",
       coordinatorSessionId: coordinatorId,

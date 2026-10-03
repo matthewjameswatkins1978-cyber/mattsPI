@@ -7,7 +7,9 @@ import {
 } from "../../../contracts/studio-runs";
 import {
   deriveStudioRunRecovery,
+  resolveLiveStudioRecoveryChildren,
   studioWorkerPresenceLabel,
+  type StudioRecoverySession,
 } from "../../../contracts/studio-recovery";
 import type {
   DesktopAppState,
@@ -91,15 +93,30 @@ export function StudioRunsView({
     () => runs.filter((run) => run.workspaceId === workspaceId),
     [runs, workspaceId],
   );
+  const currentSessions = useMemo<readonly StudioRecoverySession[]>(
+    () =>
+      workspaces.flatMap((currentWorkspace) =>
+        currentWorkspace.sessions.map((session) => ({
+          workspaceId: currentWorkspace.id,
+          sessionId: session.id,
+          status: session.status,
+        })),
+      ),
+    [workspaces],
+  );
+  const liveChildren = useMemo(
+    () => resolveLiveStudioRecoveryChildren(orchestrationChildren, currentSessions),
+    [orchestrationChildren, currentSessions],
+  );
   const reconciledRuns = useMemo(
     () =>
       visibleRuns
         .map((run) => ({
           run,
-          recovery: deriveStudioRunRecovery(run, orchestrationChildren),
+          recovery: deriveStudioRunRecovery(run, liveChildren),
         }))
         .sort((a, b) => Number(a.recovery.inHistory) - Number(b.recovery.inHistory)),
-    [visibleRuns, orchestrationChildren],
+    [visibleRuns, liveChildren],
   );
 
   const save = async (run: StudioRun) => {
@@ -482,7 +499,12 @@ export function StudioRunsView({
                   const reviewStatus = checkpoint
                     ? studioExternalReviewStatus(milestone, checkpoint.headSha)
                     : undefined;
-                  const workers = studioRunWorkerRows(run, milestone, orchestrationChildren);
+                  const workers = studioRunWorkerRows(
+                    run,
+                    milestone,
+                    orchestrationChildren,
+                    currentSessions,
+                  );
                   return (
                     <li key={milestone.id}>
                       {milestone.title} <span>· {milestone.status}</span>

@@ -1,7 +1,9 @@
 import type { OrchestrationChildThread } from "../../../contracts/desktop-state";
 import type { StudioMilestone, StudioRun } from "../../../contracts/studio-runs";
 import {
+  resolveLiveStudioRecoveryChildren,
   resolveStudioWorkerPresence,
+  type StudioRecoverySession,
   type StudioWorkerPresence,
 } from "../../../contracts/studio-recovery";
 
@@ -14,11 +16,9 @@ export interface StudioRunWorkerRow {
 /** Live worker ids for presence resolution: terminal child records count as history, not liveness. */
 function liveChildrenOf(
   children: readonly OrchestrationChildThread[],
+  sessions: readonly StudioRecoverySession[],
 ): readonly OrchestrationChildThread[] {
-  return children.filter(
-    (child) =>
-      child.status === "queued" || child.status === "running" || child.status === "waiting",
-  );
+  return resolveLiveStudioRecoveryChildren(children, sessions);
 }
 
 /** Resolve only child records owned by this run's coordinator; never infer missing route data. */
@@ -26,8 +26,9 @@ export function studioRunWorkerRows(
   run: StudioRun,
   milestone: StudioMilestone,
   children: readonly OrchestrationChildThread[],
+  sessions: readonly StudioRecoverySession[],
 ): readonly StudioRunWorkerRow[] {
-  const live = liveChildrenOf(children);
+  const live = liveChildrenOf(children, sessions);
   // Durable history is scoped to this run's coordinator: a same-named worker id
   // owned by another coordinator is not this run's history.
   const owned = children.filter(

@@ -3,6 +3,7 @@ import {
   deriveStudioMilestoneRecovery,
   deriveStudioRunRecovery,
   reconcileStudioRunsForRestart,
+  resolveLiveStudioRecoveryChildren,
   resolveStudioWorkerPresence,
   studioWorkerPresenceLabel,
   type StudioRecoveryChild,
@@ -57,6 +58,7 @@ function child(overrides: Partial<StudioRecoveryChild> = {}): StudioRecoveryChil
   return {
     id: "worker-1",
     taskId: "task-1",
+    childWorkspaceId: "workspace-1",
     childSessionId: "session-1",
     parentWorkspaceId: "workspace-1",
     parentSessionId: "coordinator-1",
@@ -113,6 +115,43 @@ test.describe("Studio restart reconciliation", () => {
     ).toBe(reconciled);
   });
 
+  test("latest same-SHA changes-requested overrides an earlier ACCEPT", () => {
+    let ms = checkpointed("verifying");
+    ms = recordStudioGitHubReview(ms, {
+      headSha: HEAD,
+      decision: "accepted",
+      now: "2026-09-29T01:00:00.000Z",
+    });
+    ms = recordStudioGitHubReview(ms, {
+      headSha: HEAD,
+      decision: "changes-requested",
+      now: "2026-09-29T02:00:00.000Z",
+    });
+
+    expect(deriveStudioMilestoneRecovery(ms, false)).toBe("repair-needed");
+    expect(
+      deriveStudioRunRecovery(run({ milestones: [ms] }), [], new Set()).canResumeImplementation,
+    ).toBe(true);
+  });
+
+  test("latest same-SHA ACCEPT overrides an earlier changes-requested", () => {
+    let ms = checkpointed("verifying");
+    ms = recordStudioGitHubReview(ms, {
+      headSha: HEAD,
+      decision: "changes-requested",
+      now: "2026-09-29T01:00:00.000Z",
+    });
+    ms = recordStudioGitHubReview(ms, {
+      headSha: HEAD,
+      decision: "accepted",
+      now: "2026-09-29T02:00:00.000Z",
+    });
+
+    expect(deriveStudioMilestoneRecovery(ms, false)).toBe("awaiting-merge");
+    expect(
+      deriveStudioRunRecovery(run({ milestones: [ms] }), [], new Set()).canResumeImplementation,
+    ).toBe(false);
+  });
   test("verifying with an exact open PR awaits review, not implementation", () => {
     const ms = checkpointed("verifying");
     const recovery = deriveStudioRunRecovery(run({ milestones: [ms] }), [], new Set());
@@ -192,6 +231,41 @@ test.describe("Studio restart reconciliation", () => {
     expect(deriveStudioRunRecovery(stopped, [], new Set()).disposition).toBe("historical");
   });
 
+  test("restart uses current session status, not persisted worker status, for liveness", () => {
+    const targetMilestone = milestone({ status: "running", workerThreadIds: ["worker-1"] });
+    const targetRun = run({ status: "running", milestones: [targetMilestone] });
+    const savedWorker = child({ status: "running" });
+    const knownWorkerIds = new Set(["worker-1"]);
+
+    const absentSession = resolveLiveStudioRecoveryChildren([savedWorker], []);
+    expect(absentSession).toEqual([]);
+    expect(
+      deriveStudioRunRecovery(targetRun, absentSession, knownWorkerIds).canResumeImplementation,
+    ).toBe(true);
+    expect(
+      reconcileStudioRunsForRestart(
+        [targetRun],
+        { liveChildren: absentSession, knownWorkerIds },
+        "2026-09-29T01:00:00.000Z",
+      )[0],
+    ).toMatchObject({ status: "paused" });
+
+    const currentSession = resolveLiveStudioRecoveryChildren(
+      [savedWorker],
+      [{ workspaceId: "workspace-1", sessionId: "session-1", status: "running" }],
+    );
+    expect(currentSession).toMatchObject([{ id: "worker-1", status: "running" }]);
+    expect(deriveStudioRunRecovery(targetRun, currentSession, knownWorkerIds).disposition).toBe(
+      "active",
+    );
+    expect(
+      reconcileStudioRunsForRestart(
+        [targetRun],
+        { liveChildren: currentSession, knownWorkerIds },
+        "2026-09-29T01:00:00.000Z",
+      )[0],
+    ).toBe(targetRun);
+  });
   test("worker presence distinguishes history from genuinely missing work", () => {
     const open = milestone({ status: "running", workerThreadIds: ["worker-1"] });
     const openRun = run({ status: "paused", milestones: [open] });

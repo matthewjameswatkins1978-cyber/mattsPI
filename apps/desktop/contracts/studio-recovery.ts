@@ -7,7 +7,6 @@
  */
 import {
   hasTrustedGitHubMergeForCheckpoint,
-  hasTrustedLucyAcceptForCheckpoint,
   studioExternalReviewStatus,
   transitionStudioRun,
   type StudioMilestone,
@@ -29,6 +28,7 @@ export type StudioWorkerPresence = "live" | "historical" | "missing-active" | "u
 export interface StudioRecoveryChild {
   readonly id: string;
   readonly taskId?: string;
+  readonly childWorkspaceId?: string;
   readonly childSessionId?: string;
   readonly parentWorkspaceId: string;
   readonly parentSessionId: string;
@@ -64,6 +64,30 @@ function isOpenMilestone(milestone: StudioMilestone): boolean {
   return !isTerminalMilestone(milestone);
 }
 
+export interface StudioRecoverySession {
+  readonly workspaceId: string;
+  readonly sessionId: string;
+  readonly status: string;
+}
+
+/** Persisted worker status describes history; only a current running session proves liveness. */
+export function resolveLiveStudioRecoveryChildren<T extends StudioRecoveryChild>(
+  children: readonly T[],
+  sessions: readonly StudioRecoverySession[],
+): readonly (T & { readonly status: string })[] {
+  const runningSessions = new Set(
+    sessions
+      .filter(({ status }) => status === "running")
+      .map(({ workspaceId, sessionId }) => JSON.stringify([workspaceId, sessionId])),
+  );
+  return children.flatMap((child) =>
+    child.childWorkspaceId &&
+    child.childSessionId &&
+    runningSessions.has(JSON.stringify([child.childWorkspaceId, child.childSessionId]))
+      ? [{ ...child, status: "running" }]
+      : [],
+  );
+}
 /** Resolve one persisted worker id against live children and durable history. */
 export function resolveStudioWorkerPresence(
   run: StudioRun,
@@ -105,28 +129,20 @@ export function deriveStudioMilestoneRecovery(
   const latest = checkpoints.at(-1);
 
   if (latest) {
+    const reviewStatus = studioExternalReviewStatus(milestone, latest.headSha);
+    if (reviewStatus === "changes-requested") return "repair-needed";
     const merged = hasTrustedGitHubMergeForCheckpoint(latest);
-    const accepted = hasTrustedLucyAcceptForCheckpoint(latest);
-    if (merged && accepted) return "settled";
-    if (merged && !accepted) return "historical";
-    if (accepted) return "awaiting-merge";
-    const latestReview = [...latest.reviewHistory]
-      .reverse()
-      .find(({ source }) => source === "matthew-confirmed-lucy");
-    if (latestReview?.decision === "changes-requested") return "repair-needed";
+
+    if (merged && reviewStatus === "merged") return "settled";
+    if (merged) return "historical";
+    if (reviewStatus === "accepted") return "awaiting-merge";
+
     // A newer pushed HEAD wipes prior review meaning: never transfer conclusions.
     if (latest.reviewHistory.length === 0 && checkpoints.length > 1) return "recovery-required";
     if (isTerminalMilestone(milestone)) return "settled";
     if (milestone.status === "verifying") {
-      try {
-        const status = studioExternalReviewStatus(milestone, latest.headSha);
-        if (status === "awaiting-lucy") return "awaiting-review";
-        if (status === "accepted") return "awaiting-merge";
-        if (status === "changes-requested") return "repair-needed";
-        if (status === "superseded") return "recovery-required";
-      } catch {
-        return "recovery-required";
-      }
+      if (reviewStatus === "awaiting-lucy") return "awaiting-review";
+      if (reviewStatus === "superseded") return "recovery-required";
     }
     if (milestone.status === "repair-needed" || milestone.status === "blocked") {
       return "repair-needed";
