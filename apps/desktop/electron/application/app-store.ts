@@ -1592,40 +1592,65 @@ export class DesktopAppStore {
       liveChildren,
       knownWorkerIds,
     });
-    // Refresh recorded GitHub checkpoints where credentials/network permit. Each
-    // observation is bound to its exact checkpoint SHA; failures keep saved state.
-    const refreshed = await Promise.all(
-      runs.map(async (run) => {
-        if (run.status === "completed" || run.status === "stopped") return run;
-        let updated = run;
-        for (const milestone of run.milestones) {
-          const pullRequestUrl =
-            milestone.githubCheckpoints?.at(-1)?.pullRequestUrl ?? milestone.pullRequestUrl;
-          if (!pullRequestUrl) continue;
-          try {
-            const observation = await readStudioGitHubPullRequest(
-              run.repositoryPath,
-              pullRequestUrl,
-            );
-            const next = applyStudioGitHubPullRequestObservation(milestone, observation);
-            if (next !== milestone) {
-              updated = {
-                ...updated,
-                milestones: updated.milestones.map((entry) =>
-                  entry.id === milestone.id ? next : entry,
-                ),
-                updatedAt: observation.observedAt,
-                revision: updated.revision + 1,
-              };
-            }
-          } catch {
-            // Honest partial reconciliation: retain saved state, do not invent PR truth.
-          }
+    // Refresh recorded GitHub checkpoints where credentials/network permit. Every
+    // checkpoint reads concurrently so one slow PR cannot stall startup behind
+    // another; each observation is bound to its exact checkpoint SHA and failures
+    // keep saved state (honest partial reconciliation, never invented PR truth).
+    const refreshTasks: {
+      readonly runId: string;
+      readonly milestoneId: string;
+      readonly repositoryPath: string;
+      readonly pullRequestUrl: string;
+    }[] = [];
+    for (const run of runs) {
+      if (run.status === "completed" || run.status === "stopped") continue;
+      for (const milestone of run.milestones) {
+        const pullRequestUrl =
+          milestone.githubCheckpoints?.at(-1)?.pullRequestUrl ?? milestone.pullRequestUrl;
+        if (!pullRequestUrl) continue;
+        refreshTasks.push({
+          runId: run.id,
+          milestoneId: milestone.id,
+          repositoryPath: run.repositoryPath,
+          pullRequestUrl,
+        });
+      }
+    }
+    const observations = await Promise.all(
+      refreshTasks.map(async (task) => {
+        try {
+          return {
+            task,
+            observation: await readStudioGitHubPullRequest(
+              task.repositoryPath,
+              task.pullRequestUrl,
+            ),
+          };
+        } catch {
+          return undefined;
         }
-        return updated;
       }),
     );
-    runs = refreshed;
+    runs = runs.map((run) => {
+      let updated = run;
+      for (const result of observations) {
+        if (!result || result.task.runId !== run.id) continue;
+        const current = updated.milestones.find(({ id }) => id === result.task.milestoneId);
+        if (!current) continue;
+        const next = applyStudioGitHubPullRequestObservation(current, result.observation);
+        if (next !== current) {
+          updated = {
+            ...updated,
+            milestones: updated.milestones.map((entry) =>
+              entry.id === result.task.milestoneId ? next : entry,
+            ),
+            updatedAt: result.observation.observedAt,
+            revision: updated.revision + 1,
+          };
+        }
+      }
+      return updated;
+    });
     if (
       runs !== this.state.studioRuns &&
       runs.some((run, index) => run !== this.state.studioRuns[index])

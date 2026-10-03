@@ -251,6 +251,40 @@ test.describe("Studio restart reconciliation", () => {
     expect(reconciled[0]).toBe(w2);
   });
 
+  test("a fresh draft without workers or checkpoints is startable, not missing", () => {
+    const target = run({
+      status: "draft",
+      milestones: [milestone({ status: "queued", workerThreadIds: [] })],
+    });
+    const recovery = deriveStudioRunRecovery(target, [], new Set());
+    expect(recovery.disposition).toBe("recovery-required");
+    expect(recovery.summary).toBe("Draft plan · not yet started");
+    expect(recovery.canResumeImplementation).toBe(true);
+    expect(recovery.inHistory).toBe(false);
+  });
+
+  test("a running run whose milestones all finished closes instead of recovering", () => {
+    const target = run({
+      status: "running",
+      milestones: [
+        milestone({ id: "m1", status: "complete", workerThreadIds: ["gone"] }),
+        milestone({ id: "m2", status: "cancelled", workerThreadIds: [] }),
+      ],
+    });
+    const reconciled = reconcileStudioRunsForRestart(
+      [target],
+      { liveChildren: [], knownWorkerIds: new Set() },
+      "2026-09-29T01:00:00.000Z",
+    );
+    expect(reconciled[0]?.status).toBe("completed");
+    expect(reconciled[0]?.lastError ?? "").not.toContain("Restart recovery required");
+    expect(deriveStudioRunRecovery(reconciled[0]!, [], new Set()).disposition).toBe("settled");
+    // Settled work stays settled across further restarts.
+    expect(
+      reconcileStudioRunsForRestart(reconciled, { liveChildren: [], knownWorkerIds: new Set() })[0],
+    ).toBe(reconciled[0]);
+  });
+
   test("restart pipeline: reconcile, observe merge, derive, repeat without mutation", () => {
     const observedAt = "2026-09-29T02:00:00.000Z";
     const ms = checkpointed("verifying");

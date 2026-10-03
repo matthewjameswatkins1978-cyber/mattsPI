@@ -181,6 +181,24 @@ export function deriveStudioRunRecovery(
     };
   }
 
+  // A draft that never dispatched and recorded no checkpoint is a plan, not a
+  // failure: startable, but never described as missing-worker recovery.
+  const hasAnyCheckpoint = run.milestones.some(
+    (milestone) =>
+      (milestone.githubCheckpoints ?? []).length > 0 ||
+      milestone.checkpointSha !== undefined ||
+      milestone.pullRequestUrl !== undefined,
+  );
+  const hasAnyWorker = run.milestones.some((milestone) => milestone.workerThreadIds.length > 0);
+  if (run.status === "draft" && !hasAnyCheckpoint && !hasAnyWorker) {
+    return {
+      disposition: "recovery-required",
+      summary: "Draft plan · not yet started",
+      canResumeImplementation: true,
+      inHistory: false,
+    };
+  }
+
   const liveForMilestone = (milestone: StudioMilestone): boolean =>
     milestone.workerThreadIds.some(
       (workerId) =>
@@ -315,6 +333,20 @@ export function reconcileStudioRunsForRestart(
       // Paused/draft/blocked runs keep durable history untouched; the derived
       // disposition (not persisted) decides actionability at render time.
       return run;
+    }
+    if (
+      run.milestones.length > 0 &&
+      run.milestones.every((milestone) => !isOpenMilestone(milestone))
+    ) {
+      // Every milestone already reached terminal status through its own lifecycle:
+      // close the run instead of mislabelling finished work as needing recovery.
+      try {
+        changed = true;
+        return transitionStudioRun(run, "completed", now);
+      } catch {
+        changed = true;
+        return withRecoveryNote(run, now);
+      }
     }
     if (runHasLiveWork(run, context)) return run;
     changed = true;
