@@ -26,6 +26,11 @@ import type {
   TranscriptMessage,
 } from "../../contracts/desktop-state";
 import type { StudioRun } from "../../contracts/studio-runs";
+import {
+  classifyWorkerFailure,
+  workerFailureNeedsCredentialAction,
+  workerInfrastructureRetryAt,
+} from "../../contracts/worker-failure";
 import { latestSessionActivityAt, previewFromTranscript } from "../application/app-store-utils";
 import { childTurnHasFinalAssistantMessage } from "./child-turn-completion";
 import { resolveChildModelRoute } from "./child-model-routing";
@@ -158,6 +163,11 @@ export interface OrchestrationOwner {
   handleOrchestrationThreadToolResult(
     event: Extract<SessionDriverEvent, { type: "toolFinished" }>,
   ): Promise<boolean>;
+  handleOrchestrationRunFailed(event: Extract<SessionDriverEvent, { type: "runFailed" }>): boolean;
+  handleOrchestrationRunCompleted(
+    event: Extract<SessionDriverEvent, { type: "runCompleted" }>,
+  ): boolean;
+  retryDueInfrastructureFailures(now?: Date): Promise<boolean>;
   hasOrchestrationChildSession(sessionRef: SessionRef): boolean;
   hasOrchestrationParentSession(sessionRef: SessionRef): boolean;
   createChildThreadToolResult(
@@ -197,6 +207,9 @@ export function createOrchestrationOwner(store: OrchestrationOwnerHost): Orchest
       projectOrchestrationChildrenForSession(store, sessionRef),
     handleOrchestrationThreadToolResult: (event) =>
       handleOrchestrationThreadToolResult(store, event),
+    handleOrchestrationRunFailed: (event) => handleOrchestrationRunFailed(store, event),
+    handleOrchestrationRunCompleted: (event) => handleOrchestrationRunCompleted(store, event),
+    retryDueInfrastructureFailures: (now) => retryDueInfrastructureFailures(store, now),
     hasOrchestrationChildSession: (sessionRef) =>
       hasOrchestrationChildSession(store.orchestrationState().orchestrationChildren, sessionRef),
     hasOrchestrationParentSession: (sessionRef) =>
@@ -939,9 +952,20 @@ async function waitForChildThreadsToolResult(
       status: child.status,
       ...(child.role ? { role: child.role } : {}),
       ...(child.model ? { provider: child.model.provider, modelId: child.model.modelId } : {}),
+      ...(child.infrastructureFailure
+        ? {
+            failure:
+              child.infrastructureFailure.blockMessage ?? child.infrastructureFailure.message,
+          }
+        : {}),
     }));
   const hasTerminalResult = () =>
-    snapshot().some((thread) => thread.status === "complete" || thread.status === "failed");
+    snapshot().some(
+      (thread) =>
+        thread.status === "complete" ||
+        thread.status === "failed" ||
+        thread.status === "unavailable",
+    );
 
   let timedOut = false;
   let aborted = input.signal.aborted;
@@ -985,7 +1009,8 @@ async function waitForChildThreadsToolResult(
           .map(
             (thread) =>
               `- ${thread.title}: ${thread.status}` +
-              (thread.provider && thread.modelId ? ` (${thread.provider}/${thread.modelId})` : ""),
+              (thread.provider && thread.modelId ? ` (${thread.provider}/${thread.modelId})` : "") +
+              (thread.failure ? ` — ${thread.failure}` : ""),
           )
           .join("\n")}`,
       },
@@ -1023,6 +1048,199 @@ function projectOrchestrationChildrenForSession(
       ? projectOrchestrationChild(store, child, now, parentEvidenceByChild.get(child.id) ?? [])
       : child,
   );
+}
+
+function handleOrchestrationRunFailed(
+  store: OrchestrationOwnerHost,
+  event: Extract<SessionDriverEvent, { type: "runFailed" }>,
+): boolean {
+  const failureClass = classifyWorkerFailure(event.error);
+  if (failureClass !== "infrastructure") return false;
+  const state = store.orchestrationState();
+  const child = state.orchestrationChildren.find(
+    (entry) =>
+      entry.childWorkspaceId === event.sessionRef.workspaceId &&
+      entry.childSessionId === event.sessionRef.sessionId,
+  );
+  if (
+    !child?.taskId ||
+    !state.studioRuns.some(
+      (run) =>
+        run.status === "running" &&
+        run.workspaceId === child.parentWorkspaceId &&
+        run.coordinatorSessionId === child.parentSessionId,
+    )
+  ) {
+    return false;
+  }
+
+  const retryCount = child.infrastructureFailure?.resolvedAt
+    ? 0
+    : (child.infrastructureFailure?.retryCount ?? 0);
+  const credentialActionRequired = workerFailureNeedsCredentialAction(event.error);
+  const retryAt = credentialActionRequired
+    ? undefined
+    : workerInfrastructureRetryAt(retryCount, new Date(event.timestamp));
+  const message = event.error.message;
+  const now = event.timestamp;
+  const loop = child.supervisionLoop ?? createSupervisionLoop(child.status, now);
+  const blockMessage = retryAt
+    ? undefined
+    : infrastructureUnavailableMessage(store, child, credentialActionRequired);
+  const infrastructureFailure = {
+    message,
+    ...(blockMessage ? { blockMessage } : {}),
+    ...(event.error.code ? { code: event.error.code } : {}),
+    retryCount: retryCount + (retryAt ? 1 : 0),
+    ...(retryAt ? { retryAt } : {}),
+  };
+  const status = retryAt ? "waiting" : "unavailable";
+  store.replaceOrchestrationChildren(
+    store.orchestrationState().orchestrationChildren.map((entry) =>
+      entry.id === child.id
+        ? {
+            ...entry,
+            status,
+            infrastructureFailure,
+            latestTranscript: retryAt
+              ? `Selected route temporarily unavailable; retry scheduled (${retryCount + 1}/${2}).`
+              : (blockMessage ?? infrastructureUnavailableMessage(store, entry)),
+            supervisionLoop: {
+              ...loop,
+              status: retryAt ? "monitoring" : "attention",
+              gate: retryAt ? "continue" : "wake",
+              reason: retryAt
+                ? "Provider route unavailable; retrying the same task and route."
+                : "Selected provider route unavailable after bounded retries; task state is preserved.",
+              lastChildStatus: status,
+              lastCheckedAt: now,
+              nextRunAt: retryAt,
+            },
+            updatedAt: now,
+          }
+        : entry,
+    ),
+  );
+  return true;
+}
+
+function infrastructureUnavailableMessage(
+  store: OrchestrationOwnerHost,
+  child: OrchestrationChildThread,
+  credentialActionRequired = false,
+): string {
+  const milestone = store
+    .orchestrationState()
+    .studioRuns.find(
+      (run) =>
+        run.workspaceId === child.parentWorkspaceId &&
+        run.coordinatorSessionId === child.parentSessionId,
+    )
+    ?.milestones.find((entry) => entry.workerThreadIds.includes(child.id));
+  const sha = milestone?.githubCheckpoints?.at(-1)?.headSha ?? milestone?.checkpointSha;
+  const route = `${child.model?.provider ?? "provider"}/${child.model?.modelId ?? "model"}`;
+  const reason = credentialActionRequired
+    ? `Selected ${route} route requires credentials/account action.`
+    : `Selected ${route} route remains unavailable after bounded retries.`;
+  return sha
+    ? `${reason} Task ${child.taskId} is safe at ${sha}; the existing session/worktree is preserved. No route was substituted.`
+    : `${reason} Task ${child.taskId} and its existing session/worktree are preserved; no verified checkpoint SHA is recorded. No route was substituted.`;
+}
+
+function handleOrchestrationRunCompleted(
+  store: OrchestrationOwnerHost,
+  event: Extract<SessionDriverEvent, { type: "runCompleted" }>,
+): boolean {
+  const child = store
+    .orchestrationState()
+    .orchestrationChildren.find(
+      (entry) =>
+        entry.childWorkspaceId === event.sessionRef.workspaceId &&
+        entry.childSessionId === event.sessionRef.sessionId &&
+        entry.infrastructureFailure,
+    );
+  if (!child) return false;
+  store.replaceOrchestrationChildren(
+    store.orchestrationState().orchestrationChildren.map((entry) =>
+      entry.id === child.id
+        ? {
+            ...entry,
+            infrastructureFailure: child.infrastructureFailure
+              ? {
+                  ...child.infrastructureFailure,
+                  retryAt: undefined,
+                  retryInFlight: false,
+                  resolvedAt: event.timestamp,
+                }
+              : undefined,
+            status: "complete",
+            updatedAt: event.timestamp,
+          }
+        : entry,
+    ),
+  );
+  return true;
+}
+
+async function retryDueInfrastructureFailures(
+  store: OrchestrationOwnerHost,
+  now = new Date(),
+): Promise<boolean> {
+  const due = store
+    .orchestrationState()
+    .orchestrationChildren.filter(
+      (child) =>
+        child.supervisionLoop?.gate !== "stop" &&
+        child.infrastructureFailure?.retryAt &&
+        Date.parse(child.infrastructureFailure.retryAt) <= now.getTime(),
+    );
+  if (due.length === 0) return false;
+  store.replaceOrchestrationChildren(
+    store.orchestrationState().orchestrationChildren.map((child) =>
+      due.some((candidate) => candidate.id === child.id)
+        ? {
+            ...child,
+            infrastructureFailure: {
+              ...child.infrastructureFailure!,
+              retryAt: undefined,
+              retryInFlight: true,
+            },
+            updatedAt: now.toISOString(),
+          }
+        : child,
+    ),
+  );
+  await store.persistUiState();
+  for (const child of due) {
+    try {
+      await store.submitComposerToSession(
+        childSessionRef(child),
+        `Resume the existing task ${child.taskId ?? child.id} from this conversation and its current worktree/checkpoint. Continue on the selected route; do not restart completed work or change provider/model/thinking settings.`,
+        [],
+        { deliverAs: "followUp", allowCommands: false },
+      );
+    } catch (error) {
+      const message = errorMessage(error);
+      store.replaceOrchestrationChildren(
+        store.orchestrationState().orchestrationChildren.map((entry) =>
+          entry.id === child.id
+            ? {
+                ...entry,
+                status: "unavailable",
+                infrastructureFailure: {
+                  ...entry.infrastructureFailure!,
+                  message,
+                  retryInFlight: false,
+                },
+                latestTranscript: message,
+                updatedAt: new Date().toISOString(),
+              }
+            : entry,
+        ),
+      );
+    }
+  }
+  return true;
 }
 
 function reconcileDueSupervisionLoops(
@@ -1149,13 +1367,24 @@ export function nextSupervisionRunAt(
   children: readonly OrchestrationChildThread[],
 ): string | undefined {
   return children
-    .flatMap((child) =>
-      child.supervisionLoop?.status !== "stopped" &&
-      child.supervisionLoop?.nextRunAt &&
-      Number.isFinite(Date.parse(child.supervisionLoop.nextRunAt))
-        ? [child.supervisionLoop.nextRunAt]
-        : [],
-    )
+    .flatMap((child) => {
+      const times: string[] = [];
+      if (
+        child.supervisionLoop?.status !== "stopped" &&
+        child.supervisionLoop?.nextRunAt &&
+        Number.isFinite(Date.parse(child.supervisionLoop.nextRunAt))
+      ) {
+        times.push(child.supervisionLoop.nextRunAt);
+      }
+      if (
+        child.supervisionLoop?.gate !== "stop" &&
+        child.infrastructureFailure?.retryAt &&
+        Number.isFinite(Date.parse(child.infrastructureFailure.retryAt))
+      ) {
+        times.push(child.infrastructureFailure.retryAt);
+      }
+      return times;
+    })
     .sort()[0];
 }
 
@@ -1312,13 +1541,53 @@ function markInitialPromptDeliveryFailed(
 ): void {
   const now = new Date().toISOString();
   const message = errorMessage(error);
+  const existing = store
+    .orchestrationState()
+    .orchestrationChildren.find((child) => child.id === childThreadId);
+  const isInfrastructureFailure = classifyWorkerFailure({ message }) === "infrastructure";
+  const credentialActionRequired = workerFailureNeedsCredentialAction({ message });
+  if (isInfrastructureFailure && existing?.infrastructureFailure) return;
+  const retryCount = existing?.infrastructureFailure?.retryCount ?? 0;
+  const retryAt = isInfrastructureFailure && !credentialActionRequired
+    ? workerInfrastructureRetryAt(retryCount, new Date(now))
+    : undefined;
   store.replaceOrchestrationChildren(
     store.orchestrationState().orchestrationChildren.map((child) =>
       child.id === childThreadId
         ? {
             ...child,
-            status: "failed",
-            latestTranscript: message,
+            status: isInfrastructureFailure ? (retryAt ? "waiting" : "unavailable") : "failed",
+            ...(isInfrastructureFailure
+              ? {
+                  infrastructureFailure: {
+                    message,
+                    retryCount: retryCount + (retryAt ? 1 : 0),
+                    ...(retryAt ? { retryAt } : {}),
+                  },
+                }
+              : {}),
+            latestTranscript: isInfrastructureFailure
+              ? retryAt
+                ? `Selected route temporarily unavailable; retry scheduled (${retryCount + 1}/2).`
+                : credentialActionRequired
+                  ? `Selected route requires credentials/account action. Task ${child.taskId ?? child.id} and its existing session/worktree are preserved; no route was substituted.`
+                  : `Selected route remains unavailable after bounded retries. Task ${child.taskId ?? child.id} and its existing session/worktree are preserved; no route was substituted.`
+              : message,
+            ...(isInfrastructureFailure
+              ? {
+                  supervisionLoop: {
+                    ...child.supervisionLoop!,
+                    status: retryAt ? "monitoring" : "attention",
+                    gate: retryAt ? "continue" : "wake",
+                    reason: retryAt
+                      ? "Provider route unavailable; retrying the same task and route."
+                      : "Selected provider route unavailable after bounded retries; task state is preserved.",
+                    lastChildStatus: retryAt ? "waiting" : "unavailable",
+                    lastCheckedAt: now,
+                    nextRunAt: retryAt,
+                  },
+                }
+              : {}),
             evidence: mergeEvidenceRecords(child.evidence, [
               {
                 id: evidenceId("delivery-failed", child.sourceToolCallId ?? child.childSessionId),
@@ -1354,9 +1623,21 @@ function projectOrchestrationChild(
   const session = store.sessionFromState(childRef);
   const rawTranscript = recentTranscriptItems(store.transcriptFor(childRef));
   const transcript = toChildTranscript(rawTranscript, MAX_CHILD_TRANSCRIPT_MESSAGES);
-  const latestTranscript = session?.preview || previewFromTranscript(rawTranscript) || child.goal;
+  const latestTranscript =
+    child.infrastructureFailure && !child.infrastructureFailure.resolvedAt
+      ? (child.infrastructureFailure.blockMessage ?? child.latestTranscript)
+      : session?.preview || previewFromTranscript(rawTranscript) || child.goal;
   const updatedAt = latestSessionActivityAt(session?.updatedAt ?? child.updatedAt, rawTranscript);
-  const status = session ? toOrchestrationStatus(session.status, childRef, store) : child.status;
+  const observedStatus = session
+    ? toOrchestrationStatus(session.status, childRef, store)
+    : child.status;
+  const status = child.infrastructureFailure?.resolvedAt
+    ? observedStatus
+    : child.infrastructureFailure
+      ? child.infrastructureFailure.retryAt || child.infrastructureFailure.retryInFlight
+        ? "waiting"
+        : "unavailable"
+      : observedStatus;
 
   return {
     ...child,
@@ -1403,7 +1684,7 @@ function projectSupervisionLoop(
   if (loop.status === "stopped" || loop.gate === "stop") {
     return loop;
   }
-  if (status === "complete" || status === "failed") {
+  if (status === "complete" || status === "failed" || status === "unavailable") {
     if (loop.gate === "wake" && loop.lastChildStatus === status) {
       return loop;
     }
@@ -1416,7 +1697,9 @@ function projectSupervisionLoop(
       reason:
         status === "failed"
           ? "Child failed; parent review is needed."
-          : "Child completed; parent review is ready.",
+          : status === "unavailable"
+            ? "Selected provider route unavailable after bounded retries; task state is preserved."
+            : "Child completed; parent review is ready.",
       lastChildStatus: status,
     };
   }

@@ -113,7 +113,7 @@ export interface SessionRecord {
 }
 
 export type OrchestrationChildThreadStatus =
-  "queued" | "running" | "waiting" | "complete" | "failed";
+  "queued" | "running" | "waiting" | "complete" | "failed" | "unavailable";
 export type OrchestrationSupervisionGate = "continue" | "stop" | "wake";
 export type OrchestrationSupervisionStatus = "monitoring" | "attention" | "stopped";
 export type OrchestrationEvidenceKind =
@@ -196,6 +196,15 @@ export interface OrchestrationChildThread {
   readonly title: string;
   readonly goal: string;
   readonly status: OrchestrationChildThreadStatus;
+  readonly infrastructureFailure?: {
+    readonly message: string;
+    readonly blockMessage?: string;
+    readonly code?: string;
+    readonly retryCount: number;
+    readonly retryAt?: string;
+    readonly retryInFlight?: boolean;
+    readonly resolvedAt?: string;
+  };
   readonly latestTranscript: string;
   readonly transcript: readonly OrchestrationChildTranscriptMessage[];
   readonly evidence: readonly OrchestrationEvidenceRecord[];

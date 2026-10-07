@@ -832,8 +832,10 @@ export class DesktopAppStore {
 
   private async runOrchestrationSupervisionTick(): Promise<void> {
     await this.initialize();
+    const retriedInfrastructureFailure =
+      await this.orchestrationOwner.retryDueInfrastructureFailures();
     const result = this.orchestrationOwner.reconcileDueSupervisionLoops();
-    if (result.changed) {
+    if (result.changed || retriedInfrastructureFailure) {
       await this.persistUiState();
       this.emit();
     }
@@ -3686,6 +3688,10 @@ export class DesktopAppStore {
       );
       if (event.type === "toolFinished") {
         await this.orchestrationOwner.handleOrchestrationThreadToolResult(event);
+      } else if (event.type === "runFailed") {
+        this.orchestrationOwner.handleOrchestrationRunFailed(event);
+      } else if (event.type === "runCompleted") {
+        this.orchestrationOwner.handleOrchestrationRunCompleted(event);
       }
       this.markSessionViewedIfActivelyViewed(event.sessionRef);
       this.state = this.syncDerivedSessionState(this.state, event.sessionRef);

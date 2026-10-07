@@ -358,6 +358,7 @@ function validateUiState(value: unknown): Record<string, unknown> {
           "title",
           "goal",
           "status",
+          "infrastructureFailure",
           "latestTranscript",
           "transcript",
           "evidence",
@@ -404,6 +405,25 @@ function validateUiState(value: unknown): Record<string, unknown> {
         (v) => toOptionalOrchestrationStatus(v) !== undefined,
         `${path}.status`,
       );
+      if (record.infrastructureFailure !== undefined) {
+        const failure = objectRecord(record.infrastructureFailure) ?? fail(`${path}.infrastructureFailure`);
+        knownKeys(
+          failure,
+          ["message", "blockMessage", "code", "retryCount", "retryAt", "retryInFlight", "resolvedAt"],
+          `${path}.infrastructureFailure`,
+        );
+        if (!string(failure.message) || numberValue(failure.retryCount) === undefined) {
+          fail(`${path}.infrastructureFailure`);
+        }
+        for (const key of ["blockMessage", "code", "retryAt", "resolvedAt"])
+          optional(failure, key, string, `${path}.infrastructureFailure.${key}`);
+        optional(
+          failure,
+          "retryInFlight",
+          (value) => typeof value === "boolean",
+          `${path}.infrastructureFailure.retryInFlight`,
+        );
+      }
       if (record.transcript !== undefined) {
         if (!Array.isArray(record.transcript)) fail(`${path}.transcript`);
         for (const message of record.transcript as unknown[]) {
@@ -606,6 +626,29 @@ function toPersistedOrchestrationChildren(value: unknown): OrchestrationChildThr
     const worktreePath = stringValue(candidate.worktreePath);
     const branchName = stringValue(candidate.branchName);
     const status = toOrchestrationStatus(candidate.status);
+    const failureCandidate = objectRecord(candidate.infrastructureFailure);
+    const failureMessage = failureCandidate ? stringValue(failureCandidate.message) : undefined;
+    const retryCount = failureCandidate ? numberValue(failureCandidate.retryCount) : undefined;
+    const infrastructureFailure =
+      failureMessage && retryCount !== undefined
+        ? {
+            message: failureMessage,
+            ...(stringValue(failureCandidate?.blockMessage)
+              ? { blockMessage: stringValue(failureCandidate?.blockMessage) }
+              : {}),
+            ...(stringValue(failureCandidate?.code)
+              ? { code: stringValue(failureCandidate?.code) }
+              : {}),
+            retryCount,
+            ...(stringValue(failureCandidate?.retryAt)
+              ? { retryAt: stringValue(failureCandidate?.retryAt) }
+              : {}),
+            ...(failureCandidate?.retryInFlight === true ? { retryInFlight: true } : {}),
+            ...(stringValue(failureCandidate?.resolvedAt)
+              ? { resolvedAt: stringValue(failureCandidate?.resolvedAt) }
+              : {}),
+          }
+        : undefined;
     const supervisionLoop = toPersistedSupervisionLoop(candidate.supervisionLoop, status);
     return [
       {
@@ -625,6 +668,7 @@ function toPersistedOrchestrationChildren(value: unknown): OrchestrationChildThr
         title,
         goal,
         status,
+        ...(infrastructureFailure ? { infrastructureFailure } : {}),
         latestTranscript:
           stringValue(candidate.latestTranscript) || retainedTranscript.at(-1)?.text || goal,
         transcript: retainedTranscript,
@@ -914,6 +958,7 @@ function toOptionalOrchestrationStatus(
     value === "waiting" ||
     value === "complete" ||
     value === "failed" ||
+    value === "unavailable" ||
     value === "running"
     ? value
     : undefined;

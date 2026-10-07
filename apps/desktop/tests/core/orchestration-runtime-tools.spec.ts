@@ -3,10 +3,11 @@ import type { AddressInfo } from "node:net";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import type { SessionRef } from "@pi-gui/session-driver";
+import type { SessionDriverEvent, SessionRef } from "@pi-gui/session-driver";
 import { recordStudioCorrection, type StudioRun } from "../../contracts/studio-runs";
 import {
   createNamedThread,
+  emitTestSessionEvent,
   getDesktopState,
   launchDesktop,
   makeUserDataDir,
@@ -94,6 +95,73 @@ async function startHangingOpenAiServer(): Promise<{
         server.close((error) => (error ? reject(error) : resolve())),
       );
     },
+  };
+}
+
+async function startQuotaThenSuccessServer(): Promise<{
+  readonly baseUrl: string;
+  readonly requestCount: () => number;
+  readonly close: () => Promise<void>;
+}> {
+  let requests = 0;
+  const server = createServer((request, response) => {
+    request.resume();
+    if (request.url?.endsWith("/models")) {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ data: [{ id: "slow" }] }));
+      return;
+    }
+    requests += 1;
+    if (requests <= 100) {
+      response.writeHead(503, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "service_overloaded" } }));
+      return;
+    }
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+    });
+    const chunks = [
+      {
+        id: "chatcmpl-infrastructure-retry",
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: "slow",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant", content: "Resumed safely." },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-infrastructure-retry",
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: "slow",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      },
+    ];
+    response.end(
+      `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`,
+    );
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    requestCount: () => requests,
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
   };
 }
 
@@ -657,5 +725,179 @@ test("create_child_thread surfaces deterministic initial-prompt delivery failure
     ).toHaveLength(1);
   } finally {
     await harness.close();
+  }
+});
+
+test("Studio bounds provider retries and preserves task, route and checkpoint", async () => {
+  test.setTimeout(60_000);
+  const server = await startQuotaThenSuccessServer();
+  const userDataDir = await makeUserDataDir();
+  const agentDir = join(userDataDir, "agent");
+  const workspacePath = await makeGitWorkspace("studio-infrastructure-retry");
+  await seedAgentDir(agentDir, {
+    withOpenAiAuth: false,
+    withDefaultModel: false,
+    enabledModels: ["slow-test/slow"],
+  });
+  await writeFile(
+    join(agentDir, "settings.json"),
+    `${JSON.stringify({ defaultProvider: "slow-test", defaultModel: "slow", enabledModels: ["slow-test/slow"] }, null, 2)}\n`,
+  );
+  await writeFile(
+    join(agentDir, "models.json"),
+    `${JSON.stringify({ providers: { "slow-test": { baseUrl: server.baseUrl, api: "openai-completions", apiKey: "unused", models: [{ id: "slow" }] } } }, null, 2)}\n`,
+  );
+  let harness = await launchDesktop(userDataDir, {
+    agentDir,
+    initialWorkspaces: [workspacePath],
+    scrubProviderEnv: true,
+    testMode: "background",
+  });
+  try {
+    const window = await harness.firstWindow();
+    await createNamedThread(window, "Coordinator");
+    const parentRef = await selectedSessionRef(window);
+    const parentState = await getDesktopState(window);
+    const workspace = parentState.workspaces.find(({ id }) => id === parentRef.workspaceId);
+    if (!workspace) throw new Error("Expected a parent workspace");
+    const checkpointSha = "a".repeat(40);
+    const now = new Date().toISOString();
+    const run: StudioRun = {
+      id: "infrastructure-retry-run",
+      workspaceId: workspace.id,
+      repositoryPath: workspace.path,
+      coordinatorSessionId: parentRef.sessionId,
+      specification: "Continue this exact task after a transient provider failure.",
+      mode: "observed",
+      status: "running",
+      milestones: [
+        {
+          id: "m1",
+          title: "Implement",
+          instruction: "Continue from the recorded checkpoint.",
+          dependsOn: [],
+          status: "running",
+          workerThreadIds: [],
+          worktreeIds: [],
+          checkpointSha,
+          deliveryRequirement: "github-pr",
+          updatedAt: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+      revision: 1,
+    };
+    await runOrchestrationRuntimeTool(harness, {
+      toolName: "save_studio_run",
+      toolCallId: "save-infrastructure-retry-run",
+      sessionRef: parentRef,
+      params: { run },
+    });
+
+    const dispatched = await runOrchestrationRuntimeTool(harness, {
+      toolName: "create_child_thread",
+      toolCallId: "create-infrastructure-retry-worker",
+      sessionRef: parentRef,
+      params: {
+        prompt: run.specification,
+        task_id: "stable-infrastructure-task",
+        role: "IMPLEMENTER",
+        provider: "slow-test",
+        model_id: "slow",
+        thinking_level: "low",
+      },
+    });
+    expect(dispatched.details).toMatchObject({ taskId: "stable-infrastructure-task" });
+    let state = await getDesktopState(window);
+    const child = state.orchestrationChildren.find(
+      (entry) => entry.taskId === "stable-infrastructure-task",
+    );
+    if (!child) throw new Error("Expected the stable Studio worker task");
+    const linkedRun = {
+      ...run,
+      revision: 2,
+      updatedAt: new Date().toISOString(),
+      milestones: run.milestones.map((milestone) => ({
+        ...milestone,
+        workerThreadIds: [child.id],
+      })),
+    };
+    await runOrchestrationRuntimeTool(harness, {
+      toolName: "save_studio_run",
+      toolCallId: "link-infrastructure-retry-worker",
+      sessionRef: parentRef,
+      params: { run: linkedRun },
+    });
+
+    const firstFailureAt = new Date(Date.now() + 60_000);
+    for (const [index, offset] of [0, 1_000, 2_000].entries()) {
+      const failure: Extract<SessionDriverEvent, { type: "runFailed" }> = {
+        type: "runFailed",
+        sessionRef: { workspaceId: child.childWorkspaceId, sessionId: child.childSessionId },
+        timestamp: new Date(firstFailureAt.getTime() + offset).toISOString(),
+        error: { code: "HTTP_503", message: "meta API error (503): service_overloaded" },
+      };
+      await emitTestSessionEvent(harness, failure);
+      state = await getDesktopState(window);
+      const observed = state.orchestrationChildren.find((entry) => entry.id === child.id);
+      expect(observed?.status).toBe(index === 2 ? "unavailable" : "waiting");
+      expect(observed?.infrastructureFailure?.retryCount).toBe(index === 0 ? 1 : 2);
+    }
+
+    state = await getDesktopState(window);
+    const blockedChild = state.orchestrationChildren.find((entry) => entry.id === child.id);
+    expect(blockedChild).toMatchObject({
+      taskId: "stable-infrastructure-task",
+      model: { provider: "slow-test", modelId: "slow" },
+      thinkingLevel: "low",
+      status: "unavailable",
+      infrastructureFailure: {
+        retryCount: 2,
+        message: expect.stringContaining("service_overloaded"),
+      },
+    });
+    expect(blockedChild?.infrastructureFailure?.blockMessage).toContain(checkpointSha);
+    expect(blockedChild?.worktreePath).toBeTruthy();
+    expect(
+      state.orchestrationChildren.filter((entry) => entry.taskId === "stable-infrastructure-task"),
+    ).toHaveLength(1);
+    expect(
+      state.studioRuns.find((entry) => entry.id === run.id)?.milestones[0]?.checkpointSha,
+    ).toBe(checkpointSha);
+    await expect
+      .poll(async () => {
+        const persistedState = JSON.parse(
+          await readFile(join(userDataDir, "ui-state.json"), "utf8"),
+        ) as {
+          orchestrationChildren?: { taskId?: string; infrastructureFailure?: unknown }[];
+        };
+        return persistedState.orchestrationChildren?.find(
+          (entry) => entry.taskId === "stable-infrastructure-task",
+        )?.infrastructureFailure;
+      })
+      .toBeTruthy();
+    await harness.close();
+    harness = await launchDesktop(userDataDir, {
+      agentDir,
+      initialWorkspaces: [workspacePath],
+      scrubProviderEnv: true,
+      testMode: "background",
+    });
+    const restartedState = await getDesktopState(await harness.firstWindow());
+    expect(
+      restartedState.orchestrationChildren.find((entry) => entry.id === child.id),
+    ).toMatchObject({
+      status: "unavailable",
+      taskId: "stable-infrastructure-task",
+      model: { provider: "slow-test", modelId: "slow" },
+      infrastructureFailure: { retryCount: 2 },
+    });
+    expect(
+      restartedState.studioRuns.find((entry) => entry.id === run.id)?.milestones[0]?.checkpointSha,
+    ).toBe(checkpointSha);
+  } finally {
+    await harness.close();
+    await server.close();
   }
 });

@@ -50,6 +50,46 @@ test("reads v15 ui-state without lastInteractedAt and writes v18", async () => {
   expect(written.lastInteractedAtBySession).toEqual({ "ws:sess": "2026-09-21T12:00:00.000Z" });
 });
 
+test("round-trips bounded infrastructure failure state for restart reconciliation", async () => {
+  const path = join(await mkdtemp(join(tmpdir(), "ui-state-worker-recovery-")), "ui-state.json");
+  const child = {
+    id: "worker-1",
+    taskId: "stable-task-1",
+    parentWorkspaceId: "workspace-1",
+    parentSessionId: "parent-1",
+    childWorkspaceId: "workspace-1",
+    childSessionId: "child-1",
+    title: "Worker",
+    goal: "Continue task",
+    status: "unavailable",
+    latestTranscript: "Route unavailable; checkpoint preserved.",
+    transcript: [],
+    evidence: [],
+    createdAt: "2026-10-07T12:00:00.000Z",
+    updatedAt: "2026-10-07T12:00:05.000Z",
+    model: { provider: "muse", modelId: "spark" },
+    thinkingLevel: "low",
+    infrastructureFailure: {
+      message: "meta API error (503): service_overloaded",
+      blockMessage: "Task is safe at abc123.",
+      code: "HTTP_503",
+      retryCount: 2,
+    },
+  } as const;
+  await writePersistedUiState(path, { orchestrationChildren: [child] });
+  const decoded = await readPersistedUiState(path);
+  expect(decoded.orchestrationChildren?.[0]).toMatchObject({
+    taskId: "stable-task-1",
+    status: "unavailable",
+    model: { provider: "muse", modelId: "spark" },
+    infrastructureFailure: {
+      code: "HTTP_503",
+      retryCount: 2,
+      blockMessage: "Task is safe at abc123.",
+    },
+  });
+});
+
 test("reads v16 ui-state without threadGrouping and writes the saved choice as v18", async () => {
   const path = join(await mkdtemp(join(tmpdir(), "ui-state-grouping-")), "ui-state.json");
   await writeFile(path, JSON.stringify({ version: 16, composerDraft: "kept" }));
