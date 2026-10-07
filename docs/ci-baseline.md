@@ -7,7 +7,7 @@ it does not change those boundaries.
 
 ## Shared baseline
 
-Run `pnpm check` locally and in the existing CI typecheck job. It runs:
+Run `pnpm check` locally and in the `Web CI` job. It runs:
 
 1. `pnpm format:check`: pinned Prettier checks source, tests, scripts, styles,
    configuration, and Markdown. `pnpm format` fixes formatting locally. Generated
@@ -46,32 +46,22 @@ Root `pnpm e2e` delegates to the desktop core command, which builds first and
 uses the canonical desktop Playwright configuration. The root Playwright config
 shares that configuration instead of maintaining weaker independent defaults.
 
-The Electron Core suite runs on four separate runners with `--shard=N/4`. Pull
-requests run it on Ubuntu under Xvfb and openbox with two Playwright workers per
-runner, so PRs don't queue for the account's few macOS runners. Pushes to `main`
-run it on macOS with one worker per runner, so macOS-only specs and regressions
-surface there, after merge. File groups are assigned automatically; every
-shard must pass the stable `desktop-core` aggregate. Per-shard JSON reports,
-file timing summaries, and failure artifacts are retained. Discovery guards
-prove the four shards cover the full suite exactly once.
-
-Core includes credential-free local-extension and injected-event regression
-coverage. Real-provider tests live in `tests/live`; real OS focus/clipboard
-coverage lives in `tests/native`. Neither a stubbed event nor an all-skipped
-provider suite establishes real-provider proof. Node-only tests, including
-local Git worktree contracts, run in the baseline unit lane.
-
+The current workflow has one Linux `Web CI` job. It runs `pnpm check` and then
+builds the website; GitHub reports success only when both steps pass. The
+workflow history records that automatic desktop and cross-platform runners were
+intentionally stopped. Desktop Core, native, live-provider, and package lanes
+remain available for local or manual verification, but are not automatic PR or
+main-branch checks.
 `pnpm verify:release-config` also enforces the GitHub Actions Node 24 allowlist
 for every workflow. Guard tests cover that policy. Application Node stays 22;
 action runtimes are a separate pin.
 
-The website build, Linux installation/package and
-Windows package jobs remain separate. `pnpm check` alone does not prove these
-surfaces. Real-provider and native desktop verification retain their own lanes.
-The final `CI required` job accepts only success from all five existing jobs.
-See [merge enforcement](merge-enforcement.md) for its contract and remote
-activation status. Repository branch rules must require this result before it
-blocks merges; local tests alone do not establish remote enforcement.
+`Web CI` is the only automated pull-request and main-branch workflow job. It
+runs the shared baseline and website build. `pnpm check` does not prove an
+Electron package, real-provider conversation, or native OS behavior; use the
+dedicated desktop lanes for those. Whether `Web CI` is a required merge check
+is controlled by GitHub branch protection or a repository ruleset, not by the
+workflow itself. See [merge enforcement](merge-enforcement.md).
 
 ## Next decisions, in order
 
