@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { OrchestrationChildThread } from "../../contracts/desktop-state";
 import type { StudioMilestone, StudioRun } from "../../contracts/studio-runs";
 import { studioRunWorkerRows } from "../../src/features/studio/studio-run-workers";
+import { resolveChildModelRoute } from "../../electron/orchestration/child-model-routing";
 
 const run: StudioRun = {
   id: "run-1",
@@ -88,4 +89,14 @@ test("Studio resolves exact worker route and worktree only within the owning coo
     branchName: "studio/feature",
     worktreePath: "C:\\scratch\\repo-worker",
   });
+});
+test("Studio worker route is explicit and remains the selected job route", () => {
+  expect(
+    resolveChildModelRoute({
+      provider: "qwen-token-plan",
+      modelId: "qwen3.8-max",
+      thinkingLevel: "low",
+    }),
+  ).toEqual({ provider: "qwen-token-plan", modelId: "qwen3.8-max", thinkingLevel: "low" });
+  expect(resolveChildModelRoute({})).toEqual({});
 });

@@ -28,6 +28,7 @@ import type {
 import type { StudioRun } from "../../contracts/studio-runs";
 import { latestSessionActivityAt, previewFromTranscript } from "../application/app-store-utils";
 import { childTurnHasFinalAssistantMessage } from "./child-turn-completion";
+import { resolveChildModelRoute } from "./child-model-routing";
 import type { RefreshStateOptions } from "../application/refresh-state-options";
 import {
   createChildThreadAction,
@@ -95,10 +96,14 @@ interface OrchestrationOwnerHost {
   withError(error: unknown): Promise<DesktopAppState>;
   persistUiState(): Promise<void>;
   workspaceRefFromState(workspaceId: string): WorkspaceRef | undefined;
-  sessionFromState(
-    sessionRef: SessionRef,
-  ):
-    | { archivedAt?: string; updatedAt: string; title: string; status: string; preview?: string }
+  sessionFromState(sessionRef: SessionRef):
+    | {
+        archivedAt?: string;
+        updatedAt: string;
+        title: string;
+        status: string;
+        preview?: string;
+      }
     | undefined;
   ensureSessionReady(sessionRef: SessionRef): Promise<SessionSnapshot | undefined>;
   ensureSessionSubscription(sessionRef: SessionRef): Promise<void>;
@@ -272,6 +277,13 @@ async function createChildThreadRecord(
   if (Boolean(input.provider) !== Boolean(input.modelId)) {
     throw new Error("Child model routing requires both provider and model_id.");
   }
+  const route = resolveChildModelRoute(input);
+  const { provider, modelId, thinkingLevel } = route;
+  if (studioRun && (!provider || !modelId || !thinkingLevel)) {
+    throw new Error(
+      `Studio task ${input.taskId} requires an explicit provider, model_id, and thinking_level; coordinator settings are not used as an implicit worker route.`,
+    );
+  }
   const environment = childEnvironment(input.role, input.environment);
 
   const pendingKey = input.sourceToolCallId ? childToolCallKey(input) : undefined;
@@ -291,10 +303,9 @@ async function createChildThreadRecord(
       existing.goal !== prompt ||
       existing.role !== input.role ||
       existing.environment !== environment ||
-      (input.provider &&
-        (existing.model?.provider !== input.provider ||
-          existing.model.modelId !== input.modelId)) ||
-      (input.thinkingLevel && existing.thinkingLevel !== input.thinkingLevel)
+      ((studioRun || provider || modelId) &&
+        (existing.model?.provider !== provider || existing.model?.modelId !== modelId)) ||
+      ((studioRun || thinkingLevel) && existing.thinkingLevel !== thinkingLevel)
     ) {
       throw new Error("Tool call id is already in use with different child thread settings.");
     }
@@ -317,10 +328,9 @@ async function createChildThreadRecord(
       existingTask.goal !== prompt ||
       existingTask.role !== input.role ||
       existingTask.environment !== environment ||
-      (input.provider &&
-        (existingTask.model?.provider !== input.provider ||
-          existingTask.model.modelId !== input.modelId)) ||
-      (input.thinkingLevel && existingTask.thinkingLevel !== input.thinkingLevel)
+      ((studioRun || provider || modelId) &&
+        (existingTask.model?.provider !== provider || existingTask.model?.modelId !== modelId)) ||
+      ((studioRun || thinkingLevel) && existingTask.thinkingLevel !== thinkingLevel)
     ) {
       throw new Error(`Task id is already in use with different task settings: ${input.taskId}`);
     }
@@ -358,8 +368,8 @@ async function createChildThreadRecord(
       rootWorkspaceId: input.parentWorkspaceId,
       environment,
       prompt,
-      ...(input.provider ? { provider: input.provider, modelId: input.modelId } : {}),
-      ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+      ...(provider && modelId ? { provider, modelId } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
     });
     const session = created.snapshot;
     const childRef = session.ref;
