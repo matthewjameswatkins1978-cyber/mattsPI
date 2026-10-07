@@ -189,6 +189,7 @@ function createCreateChildThreadTool(
       "Use create_child_thread when the user asks you to spin up, delegate to, or run a separate child thread.",
       "Keep the child prompt concrete and self-contained so the user can inspect the resulting thread.",
       "For Studio work, include a stable task_id derived from the run, milestone, worker purpose and repair attempt. Reuse exactly the same id when replaying that dispatch; do not invent a new id for a duplicate event.",
+      "For every Studio worker, explicitly pass the job's selected provider, model_id, and thinking_level. Reuse those exact values on duplicate replay, retry and recovery; never inherit the coordinator route or silently choose an app default. If no route was recorded for a legacy task, stop and request a deliberate route selection.",
     ],
     parameters: {
       type: "object",
@@ -472,7 +473,7 @@ function createSaveStudioRunTool(
       "Preserve specificationRevision and the complete corrections array when updating an existing run. A prepared correction is not applied until its impact and affected dependencies have been reconciled against the repository and active workers.",
       "Studio correction history is append-only. Mark prepared as sent only after acting on the correction packet. Mark sent as applied only after reconciling the affected milestones; include a concise reconciliationSummary. Existing milestone IDs, instructions and dependencies are immutable: progress affected work through the normal lifecycle and append replacement milestones with new IDs when the plan changes.",
       "Save the full original specification and milestone/dependency plan before dispatching child work.",
-      "Keep at most two Studio child workers active at once. Worker role and provider/model are separate choices: use catalog-confirmed free or subscription routes, pass provider and model_id together only when explicitly routing, and never silently switch to a metered route after an error or quota limit.",
+      "Keep at most two Studio child workers active at once. Worker role and provider/model are separate choices. Matthew selects the provider/model and thinking level for each job; persist and reuse that exact route, and never silently switch routes after an error or quota limit.",
       "Treat a worker's completion message as a claim, not acceptance. Move that milestone to verifying, then create a separate child thread with role independent-inspector to inspect the actual repository diff and run the specification-relevant checks. Read the inspector thread's result and evidence before deciding the milestone outcome; never use the implementation worker's own review as independent verification.",
       "Pi blocks the transition to complete unless a linked independent-inspector child from this coordinator has completed, its final report starts with PASS, its runtime evidence contains successful Git diff/status inspection and a test/check command, and this coordinator has read the inspector output. Wait for all five persisted signals; do not remove the inspector id to bypass the gate. The inspector must finish with exactly one outcome: PASS, FAIL, INCONCLUSIVE, or STOP.",
       "Accept internal verification only on PASS with the inspected revision, relevant checks and results, changed-file scope, and failure/recovery paths accounted for. INCONCLUSIVE is not PASS. On FAIL, move the milestone to repair-needed and send the worker a bounded evidence-backed repair packet; allow at most two repair attempts, then mark the milestone blocked and explain the unresolved evidence.",
@@ -587,8 +588,8 @@ function createListStudioRunsTool(
     promptSnippet:
       "list_studio_runs: get exact project workspaceId/repositoryPath and restore durable Studio plan state.",
     promptGuidelines: [
-      "Load saved Studio runs before planning, starting, updating, or resuming project work. The result includes project.workspaceId and project.repositoryPath; copy these exact values into save_studio_run and do not guess them. If a run is paused with a restart recovery note, reconcile the current Pi coordinator/worker threads, repository state, verification results, and GitHub checkpoints before dispatching. Preserve completed and already-running milestones; do not duplicate their work.",
-      "Reconcile persisted worker and checkpoint identities against actual threads and Git state before dispatching or replaying work.",
+      "Load saved Studio runs before planning, starting, updating, or resuming project work. The result includes project.workspaceId and project.repositoryPath; copy these exact values into save_studio_run and do not guess them. Each run carries a host-reconciled disposition (active, awaiting-review, awaiting-merge, repair-needed, settled, recovery-required, historical) with a next action: continue only genuinely open work, never redispatch settled history, and never replay work that is awaiting review or merge. Preserve completed and already-running milestones; do not duplicate their work.",
+      "Reconciled state outranks persisted status: a paused run with a settled disposition is history, not resumable work.",
     ],
     parameters: { type: "object", properties: {} },
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {

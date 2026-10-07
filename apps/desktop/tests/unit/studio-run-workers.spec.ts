@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { OrchestrationChildThread } from "../../contracts/desktop-state";
 import type { StudioMilestone, StudioRun } from "../../contracts/studio-runs";
 import { studioRunWorkerRows } from "../../src/features/studio/studio-run-workers";
+import { resolveChildModelRoute } from "../../electron/orchestration/child-model-routing";
 
 const run: StudioRun = {
   id: "run-1",
@@ -63,16 +64,39 @@ test("Studio resolves exact worker route and worktree only within the owning coo
     model: { provider: "wrong-provider", modelId: "wrong-model" },
   });
 
-  const rows = studioRunWorkerRows(run, milestone, [owned, otherRun]);
+  const rows = studioRunWorkerRows(
+    run,
+    milestone,
+    [owned, otherRun],
+    [{ workspaceId: "worktree-1", sessionId: "session-1", status: "running" }],
+  );
 
   expect(rows).toEqual([
-    { workerId: "worker-1", child: owned },
-    { workerId: "unloaded-worker", child: undefined },
+    { workerId: "worker-1", child: owned, presence: "live" },
+    { workerId: "unloaded-worker", child: undefined, presence: "unknown-legacy" },
   ]);
+  expect(
+    studioRunWorkerRows(
+      run,
+      milestone,
+      [owned],
+      [{ workspaceId: "worktree-1", sessionId: "session-1", status: "idle" }],
+    )[0],
+  ).toMatchObject({ child: owned, presence: "missing-active" });
   expect(rows[0]?.child).toMatchObject({
     role: "IMPLEMENTER",
     model: { provider: "qwen-token-plan", modelId: "qwen3.8-max" },
     branchName: "studio/feature",
     worktreePath: "C:\\scratch\\repo-worker",
   });
+});
+test("Studio worker route is explicit and remains the selected job route", () => {
+  expect(
+    resolveChildModelRoute({
+      provider: "qwen-token-plan",
+      modelId: "qwen3.8-max",
+      thinkingLevel: "low",
+    }),
+  ).toEqual({ provider: "qwen-token-plan", modelId: "qwen3.8-max", thinkingLevel: "low" });
+  expect(resolveChildModelRoute({})).toEqual({});
 });

@@ -234,10 +234,7 @@ export function recordStudioGitHubMerge(
   };
 }
 
-function reviewTargetsCheckpoint(
-  reviewedHeadSha: string,
-  checkpointHeadSha: string,
-): boolean {
+function reviewTargetsCheckpoint(reviewedHeadSha: string, checkpointHeadSha: string): boolean {
   return reviewedHeadSha.toLowerCase() === checkpointHeadSha.toLowerCase();
 }
 
@@ -845,6 +842,7 @@ export function transitionStudioRun(
 /**
  * A desktop restart cannot prove that the prior coordinator or its workers are still running.
  * Pause persisted runs and require an explicit coordinator reconciliation before dispatch resumes.
+ * The recovery note is appended once; repeated restarts return identical references.
  */
 export function recoverStudioRunsAfterRestart(
   runs: readonly StudioRun[],
@@ -853,6 +851,7 @@ export function recoverStudioRunsAfterRestart(
   let recoveredAny = false;
   const recovered = runs.map((run) => {
     if (run.status !== "running") return run;
+    if (run.lastError?.includes("Restart recovery required")) return run;
     recoveredAny = true;
     const paused = transitionStudioRun(run, "paused", now);
     const recoveryNote =

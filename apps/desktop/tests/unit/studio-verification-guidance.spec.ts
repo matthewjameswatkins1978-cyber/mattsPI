@@ -15,7 +15,8 @@ test("Studio coordinator instructions require independent evidence and bounded r
   expect(guidance).toContain("application owns the delivery policy");
   expect(guidance).toContain("worker's completion message as a claim, not acceptance");
   expect(guidance).toContain("at most two Studio child workers active at once");
-  expect(guidance).toContain("never silently switch to a metered route");
+  expect(guidance).toContain("Matthew selects the provider/model and thinking level for each job");
+  expect(guidance).toContain("never silently switch routes after an error or quota limit");
   expect(guidance).toContain("role independent-inspector");
   expect(guidance).toContain("Pi blocks the transition to complete");
   expect(guidance).toContain("final report starts with PASS");

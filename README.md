@@ -158,8 +158,7 @@ pnpm test           # each workspace's tests (desktop runs the core E2E lane)
 pnpm marketing:media  # re-record the README and website media from a real agent run
 ```
 
-`pnpm check` is the shared local and CI baseline. It does not launch Electron or replace the
-desktop, website-build and package CI jobs; see [docs/ci-baseline.md](docs/ci-baseline.md).
+`pnpm check` is the shared local and CI baseline. It does not launch Electron or replace the current Web CI checks. Desktop end-to-end and package checks remain manual or opt-in; see [docs/ci-baseline.md](docs/ci-baseline.md).
 
 Desktop end-to-end tests drive the real Electron app with Playwright, in lanes. `pnpm test`
 runs the `core` lane; to run everything:

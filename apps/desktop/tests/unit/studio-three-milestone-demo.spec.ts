@@ -189,9 +189,7 @@ test.describe("Studio three-milestone integrated demonstration contract", () => 
     currentRun = {
       ...currentRun,
       milestones: currentRun.milestones.map((m) =>
-        m.id === "m1-foundation"
-          ? { ...m, workerThreadIds: ["worker-1", "inspector-m1"] }
-          : m,
+        m.id === "m1-foundation" ? { ...m, workerThreadIds: ["worker-1", "inspector-m1"] } : m,
       ),
       revision: currentRun.revision + 1,
     };
@@ -236,9 +234,7 @@ test.describe("Studio three-milestone integrated demonstration contract", () => 
     currentRun = {
       ...currentRun,
       milestones: currentRun.milestones.map((m) =>
-        m.id === "m2-multiplication"
-          ? { ...m, workerThreadIds: ["worker-2", "inspector-m2"] }
-          : m,
+        m.id === "m2-multiplication" ? { ...m, workerThreadIds: ["worker-2", "inspector-m2"] } : m,
       ),
       revision: currentRun.revision + 1,
     };
@@ -266,9 +262,7 @@ test.describe("Studio three-milestone integrated demonstration contract", () => 
     currentRun = {
       ...currentRun,
       milestones: currentRun.milestones.map((m) =>
-        m.id === "m3-formatter"
-          ? { ...m, workerThreadIds: ["worker-3", "inspector-m3"] }
-          : m,
+        m.id === "m3-formatter" ? { ...m, workerThreadIds: ["worker-3", "inspector-m3"] } : m,
       ),
       revision: currentRun.revision + 1,
     };
@@ -289,10 +283,6 @@ test.describe("Studio three-milestone integrated demonstration contract", () => 
     expect(currentRun.milestones.every((m) => m.status === "complete")).toBe(true);
     const finalRun = transitionStudioRun(currentRun, "completed");
     expect(finalRun.status).toBe("completed");
-    expect(finalRun.milestones.map((m) => m.status)).toEqual([
-      "complete",
-      "complete",
-      "complete",
-    ]);
+    expect(finalRun.milestones.map((m) => m.status)).toEqual(["complete", "complete", "complete"]);
   });
 });

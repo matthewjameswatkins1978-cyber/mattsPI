@@ -77,7 +77,10 @@ test.describe("external acceptance and merge truth stay independent", () => {
   });
 
   test("complete + GitHub merged + no Lucy acceptance -> dependency false", () => {
-    const milestone = applyStudioGitHubPullRequestObservation(checkpointMilestone(HEAD_A), mergeObservation(HEAD_A));
+    const milestone = applyStudioGitHubPullRequestObservation(
+      checkpointMilestone(HEAD_A),
+      mergeObservation(HEAD_A),
+    );
     // The merge fact is recorded (code truth) but the checkpoint stays reviewable.
     expect(hasTrustedGitHubMergeForCheckpoint(milestone.githubCheckpoints![0]!)).toBe(true);
     expect(studioExternalReviewStatus(milestone, HEAD_A)).toBe("awaiting-lucy");
@@ -85,8 +88,15 @@ test.describe("external acceptance and merge truth stay independent", () => {
   });
 
   test("complete + GitHub merged + Lucy changes requested -> dependency false", () => {
-    let milestone = applyStudioGitHubPullRequestObservation(checkpointMilestone(HEAD_A), mergeObservation(HEAD_A));
-    milestone = recordStudioGitHubReview(milestone, { headSha: HEAD_A, decision: "changes-requested", now: T2 });
+    let milestone = applyStudioGitHubPullRequestObservation(
+      checkpointMilestone(HEAD_A),
+      mergeObservation(HEAD_A),
+    );
+    milestone = recordStudioGitHubReview(milestone, {
+      headSha: HEAD_A,
+      decision: "changes-requested",
+      now: T2,
+    });
     expect(studioExternalReviewStatus(milestone, HEAD_A)).toBe("changes-requested");
     expect(isStudioMilestoneDependencySatisfied(milestone)).toBe(false);
   });
@@ -128,17 +138,31 @@ test.describe("external acceptance and merge truth stay independent", () => {
   });
 
   test("merge observed first, then authorised Lucy ACCEPT for same SHA -> true after both", () => {
-    let milestone = applyStudioGitHubPullRequestObservation(checkpointMilestone(HEAD_A), mergeObservation(HEAD_A));
+    let milestone = applyStudioGitHubPullRequestObservation(
+      checkpointMilestone(HEAD_A),
+      mergeObservation(HEAD_A),
+    );
     expect(studioExternalReviewStatus(milestone, HEAD_A)).toBe("awaiting-lucy");
     expect(isStudioMilestoneDependencySatisfied(milestone)).toBe(false);
-    milestone = recordStudioGitHubReview(milestone, { headSha: HEAD_A, decision: "accepted", now: T2 });
+    milestone = recordStudioGitHubReview(milestone, {
+      headSha: HEAD_A,
+      decision: "accepted",
+      now: T2,
+    });
     expect(studioExternalReviewStatus(milestone, HEAD_A)).toBe("merged");
     expect(isStudioMilestoneDependencySatisfied(milestone)).toBe(true);
   });
 
   test("merge observed first, then CHANGES REQUESTED -> remains false", () => {
-    let milestone = applyStudioGitHubPullRequestObservation(checkpointMilestone(HEAD_A), mergeObservation(HEAD_A));
-    milestone = recordStudioGitHubReview(milestone, { headSha: HEAD_A, decision: "changes-requested", now: T2 });
+    let milestone = applyStudioGitHubPullRequestObservation(
+      checkpointMilestone(HEAD_A),
+      mergeObservation(HEAD_A),
+    );
+    milestone = recordStudioGitHubReview(milestone, {
+      headSha: HEAD_A,
+      decision: "changes-requested",
+      now: T2,
+    });
     expect(studioExternalReviewStatus(milestone, HEAD_A)).toBe("changes-requested");
     expect(isStudioMilestoneDependencySatisfied(milestone)).toBe(false);
   });
@@ -174,9 +198,9 @@ test.describe("external acceptance and merge truth stay independent", () => {
       revision: 1,
       milestones: [milestone],
     };
-    expect(() =>
-      preserveStudioRunHistory(run, { ...run, milestones: [forged] }),
-    ).toThrow("authorised confirmation");
+    expect(() => preserveStudioRunHistory(run, { ...run, milestones: [forged] })).toThrow(
+      "authorised confirmation",
+    );
   });
 
   test("generic/model save still cannot manufacture merge evidence", () => {

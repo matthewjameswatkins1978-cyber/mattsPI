@@ -78,12 +78,15 @@ import {
   STUDIO_RUNS_FILE_VERSION,
   applyStudioGitHubPullRequestObservation,
   preserveStudioRunHistory,
-  recoverStudioRunsAfterRestart,
   recordStudioCorrection as appendStudioCorrection,
   recordStudioGitHubReview,
   transitionStudioMilestone,
   transitionStudioRun,
 } from "../../contracts/studio-runs";
+import {
+  reconcileStudioRunsForRestart,
+  resolveLiveStudioRecoveryChildren,
+} from "../../contracts/studio-recovery";
 import {
   assertStudioCompletionWithReconciliation,
   resolveStudioEvidenceWaitMs,
@@ -1567,6 +1570,118 @@ export class DesktopAppStore {
     return this.persistStudioRun(updatedRun, "github-observer");
   }
 
+  /**
+   * Host-side startup reconciliation shared by automatic restart recovery and any
+   * manual "Reconcile now" trigger: pause only runs with no live execution, refresh
+   * recorded GitHub checkpoints best-effort, then persist once. Never dispatches
+   * workers, never rewrites checkpoint history, never fabricates acceptance.
+   */
+  private async reconcileStudioRunsAfterStartup(
+    startupDiagnostics: { scope: string; message: string }[],
+  ): Promise<void> {
+    if (!this.studioRunsWritable) return;
+    const currentSessions = this.state.workspaces.flatMap((workspace) =>
+      workspace.sessions.map((session) => ({
+        workspaceId: workspace.id,
+        sessionId: session.id,
+        status: session.status,
+      })),
+    );
+    const liveChildren = resolveLiveStudioRecoveryChildren(
+      this.state.orchestrationChildren,
+      currentSessions,
+    );
+    const knownWorkerIds = new Set<string>(
+      this.state.orchestrationChildren.flatMap((child) =>
+        [child.id, child.childSessionId, child.taskId].filter((entry): entry is string =>
+          Boolean(entry),
+        ),
+      ),
+    );
+    let runs = reconcileStudioRunsForRestart(this.state.studioRuns, {
+      liveChildren,
+      knownWorkerIds,
+    });
+    // Refresh recorded GitHub checkpoints where credentials/network permit. Every
+    // checkpoint reads concurrently so one slow PR cannot stall startup behind
+    // another; each observation is bound to its exact checkpoint SHA and failures
+    // keep saved state (honest partial reconciliation, never invented PR truth).
+    const refreshTasks: {
+      readonly runId: string;
+      readonly milestoneId: string;
+      readonly repositoryPath: string;
+      readonly pullRequestUrl: string;
+    }[] = [];
+    for (const run of runs) {
+      if (run.status === "completed" || run.status === "stopped") continue;
+      for (const milestone of run.milestones) {
+        const pullRequestUrl =
+          milestone.githubCheckpoints?.at(-1)?.pullRequestUrl ?? milestone.pullRequestUrl;
+        if (!pullRequestUrl) continue;
+        refreshTasks.push({
+          runId: run.id,
+          milestoneId: milestone.id,
+          repositoryPath: run.repositoryPath,
+          pullRequestUrl,
+        });
+      }
+    }
+    const observations = await Promise.all(
+      refreshTasks.map(async (task) => {
+        try {
+          return {
+            task,
+            observation: await readStudioGitHubPullRequest(
+              task.repositoryPath,
+              task.pullRequestUrl,
+            ),
+          };
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+    runs = runs.map((run) => {
+      let updated = run;
+      for (const result of observations) {
+        if (!result || result.task.runId !== run.id) continue;
+        const current = updated.milestones.find(({ id }) => id === result.task.milestoneId);
+        if (!current) continue;
+        const next = applyStudioGitHubPullRequestObservation(current, result.observation);
+        if (next !== current) {
+          updated = {
+            ...updated,
+            milestones: updated.milestones.map((entry) =>
+              entry.id === result.task.milestoneId ? next : entry,
+            ),
+            updatedAt: result.observation.observedAt,
+            revision: updated.revision + 1,
+          };
+        }
+      }
+      return updated;
+    });
+    if (
+      runs !== this.state.studioRuns &&
+      runs.some((run, index) => run !== this.state.studioRuns[index])
+    ) {
+      this.state = { ...this.state, studioRuns: [...runs] };
+      try {
+        await writeStudioRunsFile(this.studioRunsFilePath, {
+          version: STUDIO_RUNS_FILE_VERSION,
+          runs,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.studioRunsWritable = false;
+        startupDiagnostics.push({
+          scope: "application",
+          message: `Studio restart reconciliation is active in memory but could not be saved: ${message}`,
+        });
+      }
+    }
+  }
+
   async setSidebarCollapsed(sidebarCollapsed: boolean): Promise<DesktopAppState> {
     await this.initialize();
     if (this.state.sidebarCollapsed === sidebarCollapsed) {
@@ -2230,26 +2345,12 @@ export class DesktopAppStore {
       });
     }
 
+    // Load durable Studio intent/history first without reconciling: dispositions are
+    // derived only after workspaces, sessions and orchestration history are loaded below.
     try {
       const loadedRuns = await readStudioRunsFile(this.studioRunsFilePath);
-      const recoveredRuns = recoverStudioRunsAfterRestart(loadedRuns.runs);
-      this.state = { ...this.state, studioRuns: [...recoveredRuns] };
+      this.state = { ...this.state, studioRuns: [...loadedRuns.runs] };
       this.studioRunsWritable = true;
-      if (recoveredRuns !== loadedRuns.runs) {
-        try {
-          await writeStudioRunsFile(this.studioRunsFilePath, {
-            version: STUDIO_RUNS_FILE_VERSION,
-            runs: recoveredRuns,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          this.studioRunsWritable = false;
-          startupDiagnostics.push({
-            scope: "application",
-            message: `Studio restart recovery is active in memory but could not be saved: ${message}`,
-          });
-        }
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[app-store] studio-runs.json is invalid; Studio persistence disabled", error);
@@ -2296,6 +2397,11 @@ export class DesktopAppStore {
         hydrateSelectedSession: false,
         markSelectedSessionViewed: false,
       });
+      // Evidence-first restart reconciliation, in dependency order: durable runs are
+      // already loaded; sessions and persisted orchestration history are now live, so
+      // derive dispositions, refresh recorded GitHub checkpoints where safe, and only
+      // then publish. Observation first: this never dispatches workers.
+      await this.reconcileStudioRunsAfterStartup(startupDiagnostics);
       // Startup GC of leaked pi/* worktrees and branches; self-contained and
       // error-swallowing, so fire-and-forget without blocking initialization.
       void this.workspaceOwner.reconcileWorktrees().catch((error: unknown) => {

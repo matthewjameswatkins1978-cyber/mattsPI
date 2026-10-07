@@ -1,14 +1,6 @@
 import { pathToFileURL } from "node:url";
 
-export const requiredJobs = [
-  "typecheck",
-  "website-build",
-  "desktop-core",
-  "desktop-package-linux",
-  "desktop-package-windows",
-];
-
-export const coreShardJobs = ["desktop-core-shards"];
+export const requiredJobs = ["web-ci"];
 
 export function checkCiResults(needs, expectedJobs = requiredJobs) {
   if (!needs || typeof needs !== "object" || Array.isArray(needs)) {
@@ -36,16 +28,15 @@ export function checkCiResults(needs, expectedJobs = requiredJobs) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const args = process.argv.slice(2);
-    if (args.length > 1 || (args.length === 1 && args[0] !== "--core-shards")) {
-      throw new Error("Usage: check-ci-results.mjs [--core-shards]");
+    if (args.length > 0) {
+      throw new Error("Usage: check-ci-results.mjs");
     }
-    const expectedJobs = args.length ? coreShardJobs : requiredJobs;
-    const failures = checkCiResults(JSON.parse(process.env.CI_NEEDS ?? "null"), expectedJobs);
+    const failures = checkCiResults(JSON.parse(process.env.CI_NEEDS ?? "null"));
     if (failures.length) {
       console.error(failures.join("\n"));
       process.exitCode = 1;
     } else {
-      console.log(`All ${expectedJobs.length} required CI jobs succeeded.`);
+      console.log(`All ${requiredJobs.length} required CI jobs succeeded.`);
     }
   } catch (error) {
     console.error(`Cannot read CI_NEEDS: ${error.message}`);
