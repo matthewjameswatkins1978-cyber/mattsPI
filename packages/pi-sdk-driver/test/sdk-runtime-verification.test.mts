@@ -16,7 +16,7 @@ const sdkPackages = [
   "@earendil-works/pi-tui",
 ] as const;
 
-test("managed runtime guard rejects a missing runtime manifest", async () => {
+await test("managed runtime guard rejects a missing runtime manifest", async () => {
   const root = await mkdtemp(join(tmpdir(), "gary-pi-sdk-missing-runtime-"));
   try {
     const runtime = join(root, "runtime");
@@ -27,7 +27,7 @@ test("managed runtime guard rejects a missing runtime manifest", async () => {
   }
 });
 
-test("managed runtime guard rejects an SDK family that disagrees with its manifest", async () => {
+await test("managed runtime guard rejects an SDK family that disagrees with its manifest", async () => {
   const root = await mkdtemp(join(tmpdir(), "gary-pi-sdk-mismatched-runtime-"));
   try {
     const runtime = join(root, "runtime");
@@ -41,7 +41,7 @@ test("managed runtime guard rejects an SDK family that disagrees with its manife
   }
 });
 
-test("managed runtime guard accepts a coherent newer SDK family with the supported runtime API", async () => {
+await test("managed runtime guard accepts a coherent newer SDK family with the supported runtime API", async () => {
   const root = await mkdtemp(join(tmpdir(), "gary-pi-sdk-compatible-runtime-"));
   try {
     const runtime = join(root, "runtime");
