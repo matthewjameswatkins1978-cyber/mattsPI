@@ -1,5 +1,5 @@
-appId: com.pi-gui.desktop
-productName: pi-gui
+appId: com.matthew-way.gary-pi
+productName: Gary Pi
 copyright: Copyright 2026 Matthew Lam
 electronVersion: 37.10.3
 
@@ -24,7 +24,7 @@ files:
       - "**/*"
 
 extraResources:
-  - from: resources/icon.png
+  - from: resources/gary-pi-icon.png
     to: icon.png
   - from: build/pi-sdk-runtime/runtime.tgz
     to: pi-sdk-runtime/runtime.tgz
@@ -90,7 +90,8 @@ deb:
     - libgbm1
 
 win:
-  executableName: pi-gui
+  executableName: gary-pi
+  icon: resources/gary-pi-icon.ico
   # Keep icon/version metadata editing; signing is optional without credentials.
   signAndEditExecutable: true
   target:
@@ -102,6 +103,8 @@ win:
         - x64
 
 nsis:
+  shortcutName: Gary Pi
+  createDesktopShortcut: true
   artifactName: ${productName}-${version}-${arch}-setup.${ext}
 
 portable:

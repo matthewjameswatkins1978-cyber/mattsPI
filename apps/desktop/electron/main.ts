@@ -390,7 +390,7 @@ function getTerminalService(): TerminalService {
 // and for Linux/Windows window chrome.
 const appIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "icon.png")
-  : path.join(__dirname, "..", "..", "resources", "icon.png");
+  : path.join(__dirname, "..", "..", "resources", "gary-pi-icon.png");
 const appIcon = nativeImage.createFromPath(appIconPath);
 
 function parseExternalWebUrl(url: string): URL | null {
@@ -794,7 +794,7 @@ async function runManualUpdateCheck(): Promise<void> {
       // be silently suppressed if the OS permission is denied.
       const choice = await showDialog({
         type: "info",
-        title: "pi-gui",
+        title: "Gary Pi",
         message: `Version ${result.latestVersion} is available.`,
         detail: `You have ${result.currentVersion}.`,
         buttons: ["Download", "Later"],
@@ -810,7 +810,7 @@ async function runManualUpdateCheck(): Promise<void> {
     if (result.status === "up-to-date") {
       await showDialog({
         type: "info",
-        title: "pi-gui",
+        title: "Gary Pi",
         message: `You're up to date on version ${result.currentVersion}.`,
         buttons: ["OK"],
       });
@@ -819,7 +819,7 @@ async function runManualUpdateCheck(): Promise<void> {
 
     await showDialog({
       type: "warning",
-      title: "pi-gui",
+      title: "Gary Pi",
       message: "Could not check for updates right now.",
       detail: result.message,
       buttons: ["OK"],
@@ -828,7 +828,7 @@ async function runManualUpdateCheck(): Promise<void> {
     console.error("pi-gui: manual update check failed:", error);
     await showDialog({
       type: "warning",
-      title: "pi-gui",
+      title: "Gary Pi",
       message: "Could not check for updates right now.",
       detail: error instanceof Error ? error.message : String(error),
       buttons: ["OK"],
@@ -937,7 +937,8 @@ if (augmentedPath.changed) {
   process.env.PATH = augmentedPath.path;
 }
 
-app.setName("pi");
+app.setName("Gary Pi");
+app.setAppUserModelId("com.matthew-way.gary-pi");
 
 const configuredUserDataDir = process.env.PI_APP_USER_DATA_DIR?.trim() || path.join(app.getPath("appData"), "Gary Pi");
 const configuredWorktreeRoot = process.env.PI_APP_WORKTREE_ROOT?.trim();
@@ -1599,7 +1600,7 @@ async function promptForText(
     maximizable: false,
     fullscreenable: false,
     autoHideMenuBar: process.platform !== "darwin",
-    title: "pi-gui",
+    title: "Gary Pi",
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
   });
 
