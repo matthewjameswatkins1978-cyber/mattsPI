@@ -35,8 +35,13 @@ export async function generateThreadTitle(
     return null;
   }
 
-  const { SessionManager, SettingsManager, createExtensionRuntime, createAgentSession, ModelRuntime } =
-    (await loadPiSdkRuntime()).codingAgent;
+  const {
+    SessionManager,
+    SettingsManager,
+    createExtensionRuntime,
+    createAgentSession,
+    ModelRuntime,
+  } = (await loadPiSdkRuntime()).codingAgent;
 
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false },

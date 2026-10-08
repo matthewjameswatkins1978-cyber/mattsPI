@@ -47,10 +47,12 @@ test("a second pi-gui process cannot open a thread the first one holds", async (
     const firstPid = await first.electronApp.evaluate(() => process.pid);
     await createSessionViaIpc(firstWindow, workspacePath, title);
     // Start the contender only after the first process is confirmed as owner.
-    await expect.poll(async () => {
-      const [leasePath] = await findLeaseFiles(agentDir);
-      return leasePath ? leaseHolderPid(leasePath) : undefined;
-    }).toBe(firstPid);
+    await expect
+      .poll(async () => {
+        const [leasePath] = await findLeaseFiles(agentDir);
+        return leasePath ? leaseHolderPid(leasePath) : undefined;
+      })
+      .toBe(firstPid);
 
     const secondUserDataDir = await makeUserDataDir();
     second = await launchDesktop(secondUserDataDir, {

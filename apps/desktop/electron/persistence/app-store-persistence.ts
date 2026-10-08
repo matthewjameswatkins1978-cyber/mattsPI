@@ -214,7 +214,10 @@ function unwrapSerializedArray(value: unknown): unknown {
 function validateUiState(value: unknown): Record<string, unknown> {
   const parsedRoot = objectRecord(value);
   const root: Record<string, unknown> | undefined = parsedRoot
-    ? { ...parsedRoot, orchestrationChildren: unwrapSerializedArray(parsedRoot.orchestrationChildren) }
+    ? {
+        ...parsedRoot,
+        orchestrationChildren: unwrapSerializedArray(parsedRoot.orchestrationChildren),
+      }
     : undefined;
   if (!root) throw new Error("Invalid ui-state: expected an object; original data was retained.");
   const fail = (field: string): never => {
@@ -442,10 +445,19 @@ function validateUiState(value: unknown): Record<string, unknown> {
         `${path}.status`,
       );
       if (record.infrastructureFailure !== undefined) {
-        const failure = objectRecord(record.infrastructureFailure) ?? fail(`${path}.infrastructureFailure`);
+        const failure =
+          objectRecord(record.infrastructureFailure) ?? fail(`${path}.infrastructureFailure`);
         knownKeys(
           failure,
-          ["message", "blockMessage", "code", "retryCount", "retryAt", "retryInFlight", "resolvedAt"],
+          [
+            "message",
+            "blockMessage",
+            "code",
+            "retryCount",
+            "retryAt",
+            "retryInFlight",
+            "resolvedAt",
+          ],
           `${path}.infrastructureFailure`,
         );
         if (!string(failure.message) || numberValue(failure.retryCount) === undefined) {
