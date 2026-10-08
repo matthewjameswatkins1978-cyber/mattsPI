@@ -41,12 +41,19 @@ test("a second pi-gui process cannot open a thread the first one holds", async (
     testMode: "background",
   });
   let second: DesktopHarness | undefined;
+  let restarted: DesktopHarness | undefined;
   try {
     const firstWindow = await first.firstWindow();
+    const firstPid = await first.electronApp.evaluate(() => process.pid);
     await createSessionViaIpc(firstWindow, workspacePath, title);
-    await expect.poll(() => findLeaseFiles(agentDir)).toHaveLength(1);
+    // Start the contender only after the first process is confirmed as owner.
+    await expect.poll(async () => {
+      const [leasePath] = await findLeaseFiles(agentDir);
+      return leasePath ? leaseHolderPid(leasePath) : undefined;
+    }).toBe(firstPid);
 
-    second = await launchDesktop(await makeUserDataDir(), {
+    const secondUserDataDir = await makeUserDataDir();
+    second = await launchDesktop(secondUserDataDir, {
       initialWorkspaces: [workspacePath],
       agentDir,
       testMode: "background",
@@ -60,7 +67,7 @@ test("a second pi-gui process cannot open a thread the first one holds", async (
     );
 
     const [leasePath] = await findLeaseFiles(agentDir);
-    const firstPid = first.electronApp.process().pid;
+
     expect(await leaseHolderPid(leasePath)).toBe(firstPid);
 
     // Once the holder quits its lease is dead, so the thread opens here and
@@ -68,8 +75,23 @@ test("a second pi-gui process cannot open a thread the first one holds", async (
     await first.close();
     await selectSession(secondWindow, title);
     await expect(secondWindow.getByTestId("composer-error-banner")).toHaveCount(0);
-    await expect.poll(() => leaseHolderPid(leasePath)).toBe(second.electronApp.process().pid);
+    const secondPid = await second.electronApp.evaluate(() => process.pid);
+    await expect.poll(() => leaseHolderPid(leasePath)).toBe(secondPid);
+
+    await second.close();
+    second = undefined;
+    restarted = await launchDesktop(secondUserDataDir, {
+      initialWorkspaces: [workspacePath],
+      agentDir,
+      testMode: "background",
+    });
+    const restartedWindow = await restarted.firstWindow();
+    await selectSession(restartedWindow, title);
+    await expect(restartedWindow.getByTestId("composer-error-banner")).toHaveCount(0);
+    const restartedPid = await restarted.electronApp.evaluate(() => process.pid);
+    await expect.poll(() => leaseHolderPid(leasePath)).toBe(restartedPid);
   } finally {
+    await restarted?.close();
     await second?.close();
     await first.close().catch(() => {});
   }
