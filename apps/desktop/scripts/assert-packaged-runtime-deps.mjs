@@ -303,7 +303,10 @@ async function verifyPiSdkRuntimeResources(resourcesDir) {
     const { verifyPiSdkRuntimeDirectory } = await import(
       pathToFileURL(path.join(driverRoot, "dist", "sdk-runtime.js")).href
     );
-    const { manifest, codingAgent } = await verifyPiSdkRuntimeDirectory(runtimeDirectory);
+    const { manifest, codingAgent } = await verifyPiSdkRuntimeDirectory(
+      runtimeDirectory,
+      requiredPiCodingAgentVersion,
+    );
     if (manifest.sdkVersion !== requiredPiCodingAgentVersion) {
       throw new Error(
         `External runtime has ${manifest.sdkVersion}; the Pi SDK catalog requires ${requiredPiCodingAgentVersion}.`,

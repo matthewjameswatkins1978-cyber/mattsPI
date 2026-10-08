@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { expect, test } from "@playwright/test";
+
 import {
   createNamedThread,
   getDesktopState,
@@ -10,6 +12,13 @@ import {
   waitForSelectedSessionReady,
   waitForWorkspaceByPath,
 } from "../helpers/electron-app";
+
+const sdkCatalog = readFileSync(resolve(process.cwd(), "pnpm-workspace.yaml"), "utf8");
+const expectedSdkVersion = /^\s+"@earendil-works\/pi-coding-agent":\s+(\S+)\s*$/m.exec(
+  sdkCatalog,
+)?.[1];
+if (!expectedSdkVersion)
+  throw new Error("The pi-sdk catalog is missing the Pi Coding Agent version.");
 
 test("packaged app seeds and reuses the external Pi SDK runtime across a disposable session restart", async () => {
   test.setTimeout(120_000);
@@ -34,11 +43,11 @@ test("packaged app seeds and reuses the external Pi SDK runtime across a disposa
     const pointer = JSON.parse(await readFile(join(runtimeRoot, "current.json"), "utf8")) as {
       readonly directory: string;
     };
-    expect(pointer.directory).toBe("1.1.0");
+    expect(pointer.directory).toBe(expectedSdkVersion);
     const manifest = JSON.parse(
       await readFile(join(runtimeRoot, pointer.directory, "manifest.json"), "utf8"),
     ) as { readonly sdkVersion: string; readonly appMajorVersion: number };
-    expect(manifest).toMatchObject({ sdkVersion: "1.1.0", appMajorVersion: 1 });
+    expect(manifest).toMatchObject({ sdkVersion: expectedSdkVersion, appMajorVersion: 1 });
     const codingAgent = JSON.parse(
       await readFile(
         join(
@@ -73,7 +82,7 @@ test("packaged app seeds and reuses the external Pi SDK runtime across a disposa
   await writeFile(join(runtimeRoot, "current.json"), JSON.stringify({ directory: "2.0.0" }));
   await writeFile(
     join(runtimeRoot, "activation.json"),
-    JSON.stringify({ previousDirectory: "1.1.0", nextDirectory: "2.0.0" }),
+    JSON.stringify({ previousDirectory: expectedSdkVersion, nextDirectory: "2.0.0" }),
   );
 
   harness = await launchPackagedDesktop(userDataDir, {
@@ -90,7 +99,7 @@ test("packaged app seeds and reuses the external Pi SDK runtime across a disposa
     const pointer = JSON.parse(await readFile(join(runtimeRoot, "current.json"), "utf8")) as {
       readonly directory: string;
     };
-    expect(pointer.directory).toBe("1.1.0");
+    expect(pointer.directory).toBe(expectedSdkVersion);
     expect(
       await readFile(join(runtimeRoot, "activation.json"), "utf8").catch(() => undefined),
     ).toBeUndefined();

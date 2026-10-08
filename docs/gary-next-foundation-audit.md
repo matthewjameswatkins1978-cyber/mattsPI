@@ -5,6 +5,7 @@
 ## Baseline and ownership
 
 Matthew-owned MIT Electron app (`@pi-gui/desktop`). Three worktrees matter:
+
 - Baseline: app 1.0.2-rc.2, Pi SDK family 1.1.0.
 - Rabbit acceptance worktree `D:\Projects\gary-pi-rabbit-finish-01\mattsPI` at `6852c9f`: integration-test/docs/local artifact-preparation changes only.
 - `feature/gary-pi-updater-stop-resume` at `73d9dde`: older app 1.0.1 / SDK `^0.87.1`; removes managed SDK runtime/updater and Rabbit Settings relative to baseline while adding branding, presets and Studio lifecycle commands. Do not integrate wholesale; selectively port desired changes to the 1.1.0 line.
@@ -23,11 +24,11 @@ Versions/tooling: pnpm 10.25, Electron 37.10.3, React 19, TypeScript 5.9, Playwr
 
 ## Decisions and next slices
 
-**Reuse unchanged:** Pi catalogue/resource loading, typed IPC, session/catalog owners, external SDK runtime, extension host, Studio/review/recovery spine and existing GUI tests. **Do not add:** second runtime/catalogue/loader/database or new sandbox system without evidence. Correct stale 0.87.1 wording in [architecture.md](architecture.md); keep compatibility seams until SDK 1.1 tests prove removal safe.
+**Reuse unchanged:** Pi catalogue/resource loading, typed IPC, session/catalog owners, external SDK runtime, extension host, Studio/review/recovery spine and existing GUI tests. **Do not add:** second runtime/catalogue/loader/database or new sandbox system without evidence. Packet 002 corrects the stale embedded-SDK wording in [architecture.md](architecture.md); retain the isolated compatibility seams until tests prove they can be removed safely.
 
-1. **First PR:** correct stale SDK docs and guard that packaged mode requires managed runtime and pinned family. Verify [SDK tests](../packages/pi-sdk-driver/test/sdk-runtime.test.mts), [updater tests](../packages/pi-sdk-driver/test/sdk-runtime-manager.test.mts), packaged dependency checks and typecheck; no UI/profile changes.
+1. **Packet 002 PR:** correct stale SDK docs and compare packaged runtime against the pi-sdk catalog through the shared driver verifier; evidence is recorded below and in the PR, pending independent review before merge.
 2. If review finds a concrete gap, improve existing Settings provenance/availability/load diagnostics without a second registry.
 3. Port desired provider presets or stop/resume separately onto 1.1.0 with focused Electron tests.
 4. Run disposable packaged-profile/provider/worker/restart acceptance; separate fixture evidence from authorized real-provider tests.
 
-**Stop point:** no implementation begun. Review requested on 1.1.0 as baseline and whether Settings needs more provenance. No code tests run for this audit.
+**Packet 002 — SDK Baseline Guard (2026-10-08):** implemented on branch gary-next-sdk-baseline-guard. The existing runtime verifier now accepts the catalog-authoritative expected version and rejects a missing manifest, a catalog mismatch, an incoherent SDK family, or an unsupported runtime API. Packaged dependency verification passes on default Windows and explicit Windows target; the SDK driver/updater suite passes 114 tests; desktop typecheck and formatting pass. The packaged Electron session/restart/rollback smoke passes with the verified SDK preseeded. First-launch bootstrap did not produce a renderer within the 30-second smoke timeout on this host. Building the directory package was blocked after app.asar generation by Windows denying electron-builder's winCodeSign symlink extraction. No installed Gary/profile was inspected or changed. PR and CI evidence will be recorded here after publication.
