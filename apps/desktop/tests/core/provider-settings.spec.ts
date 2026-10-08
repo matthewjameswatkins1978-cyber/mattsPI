@@ -185,6 +185,7 @@ test("model groups preserve gateway routes, bulk selections, and the saved short
 
     await window.getByLabel("Search models").fill("Claude Sonnet via MiMo");
     await expect(gateway).toBeVisible();
+    await expect(gateway).toContainText("0 of 2 enabled");
     await expect(gateway.getByRole("button", { name: /mimo-account/ })).toHaveAttribute(
       "aria-expanded",
       "true",
@@ -195,6 +196,20 @@ test("model groups preserve gateway routes, bulk selections, and the saved short
         exact: true,
       }),
     ).toBeVisible();
+
+    await gateway.getByRole("button", { name: "Enable all", exact: true }).click();
+    await expect(gateway).toHaveAttribute("data-selection", "all");
+    await window.getByLabel("Search models").fill("");
+    await expect(
+      gateway.getByRole("switch", {
+        name: "Enable mimo-account/claude-haiku-4",
+        exact: true,
+      }),
+    ).toBeChecked();
+
+    await window.getByLabel("Search models").fill("Claude Sonnet via MiMo");
+    await gateway.getByRole("button", { name: "Disable all", exact: true }).click();
+    await expect(gateway).toHaveAttribute("data-selection", "none");
     await window.getByLabel("Search models").fill("");
 
     if (process.env.PI_APP_PROVIDER_GROUPS_PROOF_DIR) {
@@ -234,6 +249,72 @@ test("model groups preserve gateway routes, bulk selections, and the saved short
     await expect(picker).toContainText("deepseek-chat");
     await expect(picker).toContainText("gpt-5");
     await expect(picker).not.toContainText("claude-sonnet-4");
+  } finally {
+    await harness.close();
+  }
+});
+
+test("stale enabled patterns cannot count as another selectable model", async () => {
+  test.setTimeout(60_000);
+  const userDataDir = await makeUserDataDir();
+  const agentDir = join(userDataDir, "agent");
+  const workspacePath = await makeWorkspace("provider-settings-stale-patterns-workspace");
+  await seedAgentDir(agentDir, {
+    withOpenAiAuth: false,
+    withDefaultModel: false,
+    enabledModels: ["review-gateway/model-one", "removed/stale-model"],
+  });
+  await writeFile(
+    join(agentDir, "models.json"),
+    `${JSON.stringify(
+      {
+        providers: {
+          "review-gateway": {
+            baseUrl: "https://gateway.example.test/v1",
+            api: "openai-completions",
+            apiKey: "fixture-key",
+            models: [{ id: "model-one" }, { id: "model-two" }],
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
+  const harness = await launchDesktop(userDataDir, {
+    agentDir,
+    initialWorkspaces: [workspacePath],
+    scrubProviderEnv: true,
+    testMode: "background",
+  });
+  try {
+    const window = await harness.firstWindow();
+    await window.keyboard.press(desktopShortcut(","));
+    await window.getByRole("button", { name: "Models", exact: true }).click();
+    const group = window
+      .getByTestId("settings-model-list")
+      .locator('[data-provider-id="review-gateway"]');
+    await expect(group).toHaveAttribute("data-selection", "some");
+    await expect(group).toContainText("1 of 2 enabled");
+    await expect(group.getByRole("button", { name: "Disable all", exact: true })).toBeDisabled();
+
+    await group.getByRole("button", { name: /review-gateway/i }).click();
+    const modelOne = group.getByRole("switch", {
+      name: "Enable review-gateway/model-one",
+      exact: true,
+    });
+    await expect(modelOne).toBeChecked();
+    await expect(modelOne).toBeDisabled();
+    const modelTwo = group.getByRole("switch", {
+      name: "Enable review-gateway/model-two",
+      exact: true,
+    });
+    await expect(modelTwo).not.toBeChecked();
+    await expect(modelTwo).toBeEnabled();
+    await modelTwo.click();
+    await expect(group).toHaveAttribute("data-selection", "all");
   } finally {
     await harness.close();
   }

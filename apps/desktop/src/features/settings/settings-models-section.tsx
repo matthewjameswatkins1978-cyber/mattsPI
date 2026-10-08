@@ -124,13 +124,18 @@ export function SettingsModelsSection({
     options: { readonly controls: boolean; readonly listId: string },
   ) =>
     groupModels(items).map((group) => {
+      const visibleGroupModels = filterModels(group.models, query);
+      if (searching && visibleGroupModels.length === 0) return null;
+
       const patterns = group.models.map(modelPattern);
       const enabledCount = patterns.filter((pattern) => activeSet.has(pattern)).length;
       const selection =
         enabledCount === 0 ? "none" : enabledCount === patterns.length ? "all" : "some";
       const expanded = searching || expandedProviders.has(group.providerId);
       const panelId = `${options.listId}-${group.providerId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-      const enabledOutsideGroup = activePatterns.some((pattern) => !patterns.includes(pattern));
+      const enabledOutsideGroup = enabledModels.some(
+        (model) => model.providerId !== group.providerId,
+      );
 
       return (
         <div
@@ -184,7 +189,7 @@ export function SettingsModelsSection({
           </div>
           {expanded ? (
             <div className="settings-provider-group__models" id={panelId}>
-              {group.models.map((model) => {
+              {visibleGroupModels.map((model) => {
                 const pattern = modelPattern(model);
                 const enabled = activeSet.has(pattern);
                 return (
@@ -198,7 +203,7 @@ export function SettingsModelsSection({
                     {options.controls ? (
                       <SettingsSwitch
                         checked={enabled}
-                        disabled={enabled && !activePatterns.some((entry) => entry !== pattern)}
+                        disabled={enabled && enabledModels.length <= 1}
                         label={`Enable ${pattern}`}
                         onChange={(next) => setEnabled(pattern, next)}
                       />
@@ -280,7 +285,7 @@ export function SettingsModelsSection({
               </span>
             </div>
           ) : (
-            renderProviderGroups(visibleAvailable, { controls: true, listId: "enabled-models" })
+            renderProviderGroups(availableModels, { controls: true, listId: "enabled-models" })
           )}
         </div>
       </section>
@@ -301,7 +306,7 @@ export function SettingsModelsSection({
           </p>
           {searching || showUnconnected ? (
             <div className="settings-group" data-testid="settings-unconnected-model-list">
-              {renderProviderGroups(visibleUnconnected, {
+              {renderProviderGroups(unconnectedModels, {
                 controls: false,
                 listId: "unconnected-models",
               })}
