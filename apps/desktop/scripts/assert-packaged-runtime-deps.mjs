@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -6,7 +7,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
-import semver from "semver";
 import YAML from "yaml";
 
 const requiredPackages = [
@@ -76,6 +76,7 @@ const requiredPackages = [
   "proxy-agent",
   "retry",
   "semver",
+  "tar",
   "shebang-command",
   "strip-ansi",
   "tslib",
@@ -106,14 +107,18 @@ const notificationHelperPath =
     : undefined;
 const pnpmBinary = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const piCodingAgentPackageName = "@earendil-works/pi-coding-agent";
+const chordPackageName = "@earendil-works/chord";
 const workspaceManifest = YAML.parse(
   readFileSync(path.resolve(desktopDir, "../..", "pnpm-workspace.yaml"), "utf8"),
+);
+const requiredChordVersion = String(
+  workspaceManifest.catalogs?.["pi-sdk"]?.[chordPackageName] ?? "",
 );
 const requiredPiCodingAgentVersion = String(
   workspaceManifest.catalogs?.["pi-sdk"]?.[piCodingAgentPackageName] ?? "",
 );
-if (!requiredPiCodingAgentVersion) {
-  throw new Error("The pnpm pi-sdk catalog must declare the Pi SDK runtime version.");
+if (!requiredChordVersion || !requiredPiCodingAgentVersion) {
+  throw new Error("The pnpm pi-sdk catalog must declare the Pi SDK runtime versions.");
 }
 const modelChecks = [
   ...["openai", "openai-codex", "github-copilot"].flatMap((provider) =>
@@ -152,11 +157,6 @@ const modelChecks = [
 const packagedRuntimeImportChecks = [
   ["@pi-gui", "extension-ui", "dist", "transport.js"],
   ["@pi-gui", "extension-ui", "dist", "frame-bridge.js"],
-  // Import implementations: provider descriptors can defer loading their SDKs.
-  ["@earendil-works", "pi-ai", "dist", "api", "google-generative-ai.js"],
-  ["@earendil-works", "pi-ai", "dist", "api", "anthropic-messages.js"],
-  ["@earendil-works", "pi-ai", "dist", "api", "openai-responses.js"],
-  ["@earendil-works", "pi-ai", "dist", "bedrock-provider.js"],
   ["proxy-agent", "dist", "index.js"],
 ];
 
@@ -178,9 +178,10 @@ try {
   });
 
   verifyRequiredPackages(extractedDir);
-  verifyPiDependencyVersions(extractedDir);
-  await verifyPackagedPiRuntime(extractedDir);
+  verifyNoEmbeddedPiRuntime(extractedDir);
+  verifyPackagedChordVersion(extractedDir);
   await verifyPackagedRuntimeImports(extractedDir);
+  await verifyPiSdkRuntimeResources(path.dirname(asarPath));
   await verifyNativeNodePty(asarPath);
 } finally {
   try {
@@ -248,92 +249,105 @@ function verifyRequiredPackages(extractedDir) {
   }
 }
 
-function verifyPiDependencyVersions(extractedDir) {
-  const mismatches = [];
-  // Validate the full required graph using the versions Node would resolve.
-  // Hoisted packaging can include a dependency but lose its required nested version.
-  const pending = [
-    piCodingAgentPackageName,
-    "@earendil-works/pi-agent-core",
-    "@earendil-works/pi-ai",
-    "@earendil-works/pi-tui",
-    "@earendil-works/chord",
-  ].map((packageName) => path.join(extractedDir, "node_modules", packageName, "package.json"));
-  const visited = new Set();
-  while (pending.length > 0) {
-    const packageFile = pending.pop();
-    if (visited.has(packageFile)) continue;
-    visited.add(packageFile);
-    const manifest = JSON.parse(readFileSync(packageFile, "utf8"));
-    const resolveFromPackage = createRequire(packageFile);
-    for (const [dependency, requiredVersion] of Object.entries(manifest.dependencies ?? {})) {
-      const dependencyFile = (resolveFromPackage.resolve.paths(dependency) ?? [])
-        // Never let dependencies installed outside the extracted app hide an omission.
-        .filter((directory) => directory.startsWith(`${extractedDir}${path.sep}`))
-        .map((directory) => path.join(directory, dependency, "package.json"))
-        .find((candidate) => existsSync(candidate));
-      const actualVersion = dependencyFile
-        ? JSON.parse(readFileSync(dependencyFile, "utf8")).version
-        : undefined;
-      if (!actualVersion || !semver.satisfies(actualVersion, requiredVersion)) {
-        mismatches.push(
-          `${path.relative(extractedDir, packageFile)} (${manifest.version}) requires ${dependency}@${requiredVersion}; packaged resolution is ${actualVersion ?? "missing"}`,
-        );
-      }
-      if (dependencyFile) pending.push(dependencyFile);
-    }
-  }
-  if (mismatches.length > 0) {
-    throw new Error(`Packaged Pi dependency versions do not match:\n${mismatches.join("\n")}`);
+function verifyNoEmbeddedPiRuntime(extractedDir) {
+  const embeddedRuntime = path.join(
+    extractedDir,
+    "node_modules",
+    ...piCodingAgentPackageName.split("/"),
+  );
+  if (existsSync(embeddedRuntime)) {
+    throw new Error(
+      "Packaged app embeds Pi Coding Agent; the external runtime must be authoritative.",
+    );
   }
 }
 
-async function verifyPackagedPiRuntime(extractedDir) {
-  const packageJsonPath = path.join(
+function verifyPackagedChordVersion(extractedDir) {
+  const packagePath = path.join(
     extractedDir,
     "node_modules",
-    ...piCodingAgentPackageName.split("/"),
+    ...chordPackageName.split("/"),
     "package.json",
   );
-  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-  if (packageJson.version !== requiredPiCodingAgentVersion) {
+  const actualVersion = JSON.parse(readFileSync(packagePath, "utf8")).version;
+  if (actualVersion !== requiredChordVersion) {
     throw new Error(
-      `Packaged app has ${piCodingAgentPackageName} ${packageJson.version}; expected ${requiredPiCodingAgentVersion}.`,
+      `Renderer Chord ${actualVersion} does not match Pi SDK catalog ${requiredChordVersion}.`,
     );
   }
+}
 
-  const runtimeEntry = path.join(
-    extractedDir,
-    "node_modules",
-    ...piCodingAgentPackageName.split("/"),
-    "dist",
-    "index.js",
-  );
-  const { ModelRuntime } = await import(pathToFileURL(runtimeEntry).href);
-  const authDir = mkdtempSync(path.join(tmpdir(), "pi-gui-packaged-runtime-models-"));
-  const runtime = await ModelRuntime.create({
-    authPath: path.join(authDir, "auth.json"),
-    modelsPath: null,
-    refreshOnCreate: false,
-  });
-  const models = runtime.getModels();
-  for (const check of modelChecks) {
-    const model = models.find(
-      (entry) => entry.provider === check.provider && entry.id === check.id,
+async function verifyPiSdkRuntimeResources(resourcesDir) {
+  const archivePath = path.join(resourcesDir, "pi-sdk-runtime", "runtime.tgz");
+  const digestPath = `${archivePath}.sha256`;
+  if (!existsSync(archivePath) || !existsSync(digestPath)) {
+    throw new Error(`Packaged Pi SDK runtime seed is missing under ${path.dirname(archivePath)}.`);
+  }
+  const digestText = readFileSync(digestPath, "utf8").trim();
+  const expectedDigest = /^sha256:([a-f0-9]{64})$/i.exec(digestText)?.[1]?.toLowerCase();
+  const actualDigest = createHash("sha256").update(readFileSync(archivePath)).digest("hex");
+  if (!expectedDigest || expectedDigest !== actualDigest) {
+    throw new Error("Packaged Pi SDK runtime seed failed SHA-256 verification.");
+  }
+
+  const runtimeDirectory = mkdtempSync(path.join(tmpdir(), "pi-gui-external-sdk-runtime-"));
+  try {
+    const driverRoot = path.resolve(desktopDir, "../../packages/pi-sdk-driver");
+    const { x: extractTar } = createRequire(path.join(driverRoot, "package.json"))("tar");
+    await extractTar({
+      cwd: runtimeDirectory,
+      file: archivePath,
+      strict: true,
+      preservePaths: false,
+    });
+    const { verifyPiSdkRuntimeDirectory } = await import(
+      pathToFileURL(path.join(driverRoot, "dist", "sdk-runtime.js")).href
     );
-    const modelKey = `${check.provider}/${check.id}`;
-    if (!model) {
-      throw new Error(`Packaged Pi runtime does not expose ${modelKey} for ${check.reason}.`);
+    const { manifest, codingAgent } = await verifyPiSdkRuntimeDirectory(runtimeDirectory);
+    if (manifest.sdkVersion !== requiredPiCodingAgentVersion) {
+      throw new Error(
+        `External runtime has ${manifest.sdkVersion}; the Pi SDK catalog requires ${requiredPiCodingAgentVersion}.`,
+      );
     }
-    if (check.requireReasoning && !model.reasoning) {
-      throw new Error(`Packaged ${modelKey} is missing reasoning support for ${check.reason}.`);
+    await verifyRuntimeModels(codingAgent.ModelRuntime);
+  } finally {
+    rmSync(runtimeDirectory, { recursive: true, force: true });
+  }
+}
+
+async function verifyRuntimeModels(ModelRuntime) {
+  const authDir = mkdtempSync(path.join(tmpdir(), "pi-gui-packaged-runtime-models-"));
+  let runtime;
+  try {
+    runtime = await ModelRuntime.create({
+      authPath: path.join(authDir, "auth.json"),
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    const models = runtime.getModels();
+    for (const check of modelChecks) {
+      const model = models.find(
+        (entry) => entry.provider === check.provider && entry.id === check.id,
+      );
+      const modelKey = `${check.provider}/${check.id}`;
+      if (!model) {
+        throw new Error(`Packaged Pi runtime does not expose ${modelKey} for ${check.reason}.`);
+      }
+      if (check.requireReasoning && !model.reasoning) {
+        throw new Error(`Packaged ${modelKey} is missing reasoning support for ${check.reason}.`);
+      }
+      if (check.requireImageInput && !model.input.includes("image")) {
+        throw new Error(`Packaged ${modelKey} is missing image input support for ${check.reason}.`);
+      }
+      if (check.requireMaxThinking && model.thinkingLevelMap?.max !== "max") {
+        throw new Error(
+          `Packaged ${modelKey} is missing max thinking support for ${check.reason}.`,
+        );
+      }
     }
-    if (check.requireImageInput && !model.input.includes("image")) {
-      throw new Error(`Packaged ${modelKey} is missing image input support for ${check.reason}.`);
-    }
-    if (check.requireMaxThinking && model.thinkingLevelMap?.max !== "max") {
-      throw new Error(`Packaged ${modelKey} is missing max thinking support for ${check.reason}.`);
-    }
+  } finally {
+    await runtime?.dispose?.();
+    rmSync(authDir, { recursive: true, force: true });
   }
 }
 

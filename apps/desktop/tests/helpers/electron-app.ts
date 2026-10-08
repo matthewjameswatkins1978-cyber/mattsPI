@@ -227,7 +227,7 @@ function isPlaceholderElectronPage(page: Page): boolean {
 
 async function waitForDesktopRendererPage(
   electronApp: ElectronApplication,
-  timeoutMs = 30_000,
+  timeoutMs = Math.max(1, Number(process.env.PI_APP_TEST_RENDERER_TIMEOUT_MS) || 30_000),
 ): Promise<Page> {
   const deadline = Date.now() + timeoutMs;
   const pick = () =>

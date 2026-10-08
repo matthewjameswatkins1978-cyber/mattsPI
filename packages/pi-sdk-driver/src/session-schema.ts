@@ -1,6 +1,6 @@
 import type { SessionSchemaInfo } from "@pi-gui/session-driver";
 import { open } from "node:fs/promises";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { loadPiSdkRuntime } from "./sdk-runtime.js";
 
 /**
  * Session-file schema-version skew detection.
@@ -21,15 +21,20 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
  * introducing unparseable entries would flag with nothing actually lost.
  */
 
-/** The session schema version the bundled pi runtime writes and understands. */
-export const RUNTIME_SCHEMA_VERSION: number = CURRENT_SESSION_VERSION;
+/** The session schema version the active Pi runtime writes and understands. */
+export async function getRuntimeSchemaVersion(): Promise<number> {
+  return (await loadPiSdkRuntime()).codingAgent.CURRENT_SESSION_VERSION;
+}
 
-export function buildSessionSchemaInfo(fileSchemaVersion: number | undefined): SessionSchemaInfo {
+export function buildSessionSchemaInfo(
+  fileSchemaVersion: number | undefined,
+  runtimeSchemaVersion: number,
+): SessionSchemaInfo {
   return {
     fileSchemaVersion,
-    runtimeSchemaVersion: RUNTIME_SCHEMA_VERSION,
+    runtimeSchemaVersion,
     writtenByNewerRuntime:
-      fileSchemaVersion !== undefined && fileSchemaVersion > RUNTIME_SCHEMA_VERSION,
+      fileSchemaVersion !== undefined && fileSchemaVersion > runtimeSchemaVersion,
   };
 }
 

@@ -12,7 +12,14 @@ import {
   type MenuItemConstructorOptions,
   type MessageBoxOptions,
 } from "electron";
-import { isValidHttpBaseUrl } from "@pi-gui/pi-sdk-driver";
+import {
+  configurePiSdkRuntime,
+  isValidHttpBaseUrl,
+  loadPiSdkRuntime,
+  markPiSdkRuntimeHealthy,
+  preparePiSdkRuntime,
+  startPiSdkRuntimeUpdater,
+} from "@pi-gui/pi-sdk-driver";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import type {
@@ -171,6 +178,7 @@ async function runScheduledTaskRuntimeToolForTest(
 
 let stopNotifications: (() => void) | undefined;
 let stopUpdateChecker: (() => void) | undefined;
+let stopPiSdkRuntimeUpdater: (() => void) | undefined;
 let stopPruningTerminals: (() => void) | undefined;
 let retainedTerminalWorkspacePathSignature = "";
 const terminalFocusedWebContentsIds = new Set<number>();
@@ -960,6 +968,26 @@ app
       return;
     }
 
+    if (app.isPackaged) {
+      const runtimeRoot = path.join(configuredUserDataDir, "pi-sdk");
+      const managerOptions = {
+        runtimeRoot,
+        appVersion: app.getVersion(),
+        bootstrapArchivePath: path.join(process.resourcesPath, "pi-sdk-runtime", "runtime.tgz"),
+        bootstrapDigestPath: path.join(
+          process.resourcesPath,
+          "pi-sdk-runtime",
+          "runtime.tgz.sha256",
+        ),
+      };
+      await preparePiSdkRuntime(managerOptions);
+      configurePiSdkRuntime({ directory: runtimeRoot, required: true });
+      const runtime = await loadPiSdkRuntime();
+      await markPiSdkRuntimeHealthy(runtimeRoot, runtime.manifest.sdkVersion);
+    } else {
+      configurePiSdkRuntime({ required: false });
+    }
+
     // On macOS, packaged builds already render the dock icon from `icon.icns`
     // in the app bundle. In dev we override the generic Electron dock icon with
     // the real PNG so the running app looks right end-to-end.
@@ -1141,6 +1169,18 @@ app
     if (!isDev) {
       stopUpdateChecker = initUpdateChecker();
     }
+    if (app.isPackaged && appTestMode === undefined) {
+      stopPiSdkRuntimeUpdater = startPiSdkRuntimeUpdater({
+        runtimeRoot: path.join(configuredUserDataDir, "pi-sdk"),
+        appVersion: app.getVersion(),
+        bootstrapArchivePath: path.join(process.resourcesPath, "pi-sdk-runtime", "runtime.tgz"),
+        bootstrapDigestPath: path.join(
+          process.resourcesPath,
+          "pi-sdk-runtime",
+          "runtime.tgz.sha256",
+        ),
+      });
+    }
 
     registerDesktopIpc({
       windows: windowOwner,
@@ -1261,6 +1301,12 @@ app
   })
   .catch((error: unknown) => {
     console.error("[main] Application startup failed", error);
+    if (app.isReady()) {
+      dialog.showErrorBox(
+        "Pi SDK runtime unavailable",
+        error instanceof Error ? error.message : "The managed Pi SDK runtime could not be loaded.",
+      );
+    }
     app.exit(1);
   });
 
@@ -1276,6 +1322,8 @@ app.on("window-all-closed", () => {
     notificationPermissionService = undefined;
     stopUpdateChecker?.();
     stopUpdateChecker = undefined;
+    stopPiSdkRuntimeUpdater?.();
+    stopPiSdkRuntimeUpdater = undefined;
     stopPruningTerminals?.();
     stopPruningTerminals = undefined;
     terminalService?.dispose();
@@ -1292,6 +1340,8 @@ app.on("before-quit", (event) => {
   notificationPermissionService = undefined;
   stopUpdateChecker?.();
   stopUpdateChecker = undefined;
+  stopPiSdkRuntimeUpdater?.();
+  stopPiSdkRuntimeUpdater = undefined;
   stopPruningTerminals?.();
   stopPruningTerminals = undefined;
   terminalService?.dispose();

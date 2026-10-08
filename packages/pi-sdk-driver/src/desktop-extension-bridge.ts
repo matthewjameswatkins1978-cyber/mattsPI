@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
-import {
-  createEventBus,
-  type CreateAgentSessionServicesOptions,
-  type ExtensionFactory,
+import type {
+  CreateAgentSessionServicesOptions,
+  ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import {
   DESKTOP_VIEW_DISCOVER,
@@ -41,7 +40,7 @@ export function createDesktopExtensionBridge(options: {
 }): {
   mergeResourceLoaderOptions(existing: ResourceLoaderOptions): ResourceLoaderOptions;
 } {
-  const eventBus = createEventBus();
+  const eventBus = createLocalEventBus();
   const declarations = new Set<DesktopViewDeclaration>();
   let loadedExtensions: readonly { readonly resolvedPath: string }[] = [];
   let active: { readonly target: SessionRef; readonly generation: string } | undefined;
@@ -122,6 +121,21 @@ export function createDesktopExtensionBridge(options: {
           return selected;
         },
       };
+    },
+  };
+}
+
+function createLocalEventBus() {
+  const listeners = new Map<string, Set<(value: unknown) => void>>();
+  return {
+    on(event: string, listener: (value: unknown) => void): () => void {
+      const group = listeners.get(event) ?? new Set();
+      group.add(listener);
+      listeners.set(event, group);
+      return () => group.delete(listener);
+    },
+    emit(event: string, value: unknown): void {
+      for (const listener of listeners.get(event) ?? []) listener(value);
     },
   };
 }

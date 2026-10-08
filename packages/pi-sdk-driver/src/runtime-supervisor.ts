@@ -1,19 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import {
-  CredentialSynchronizationError,
+import type {
   DefaultPackageManager,
   DefaultResourceLoader,
   ModelRuntime,
-  type PackageSource,
+  PackageSource,
   SettingsManager,
-  parseFrontmatter,
-  stripFrontmatter,
-  type InlineExtension,
-  type PathMetadata,
-  type ResolvedPaths,
-  type ResolvedResource,
+  InlineExtension,
+  PathMetadata,
+  ResolvedPaths,
+  ResolvedResource,
 } from "@earendil-works/pi-coding-agent";
+import { loadPiSdkRuntime } from "./sdk-runtime.js";
 import type {
   RuntimeLoginCallbacks,
   RuntimeExtensionDiagnostic,
@@ -178,6 +176,7 @@ export class RuntimeSupervisor implements RuntimeResourceDriver {
         notify: () => undefined,
       });
     } catch (error) {
+      const { CredentialSynchronizationError } = (await loadPiSdkRuntime()).codingAgent;
       if (!(error instanceof CredentialSynchronizationError)) {
         throw error;
       }
@@ -425,13 +424,14 @@ export class RuntimeSupervisor implements RuntimeResourceDriver {
       return existing;
     }
 
-    let settingsManager = SettingsManager.create(workspace.path, this.agentDir);
-    let packageManager = new DefaultPackageManager({
+    const sdk = (await loadPiSdkRuntime()).codingAgent;
+    let settingsManager = sdk.SettingsManager.create(workspace.path, this.agentDir);
+    let packageManager = new sdk.DefaultPackageManager({
       cwd: workspace.path,
       agentDir: this.agentDir,
       settingsManager,
     });
-    let resourceLoader = new DefaultResourceLoader({
+    let resourceLoader = new sdk.DefaultResourceLoader({
       cwd: workspace.path,
       agentDir: this.agentDir,
       settingsManager,
@@ -444,7 +444,10 @@ export class RuntimeSupervisor implements RuntimeResourceDriver {
         throw error;
       }
 
-      const fallbackSettingsManager = createSettingsManagerWithoutNpmPackages(settingsManager);
+      const fallbackSettingsManager = createSettingsManagerWithoutNpmPackages(
+        settingsManager,
+        sdk.SettingsManager,
+      );
       if (!fallbackSettingsManager) {
         throw error;
       }
@@ -456,12 +459,12 @@ export class RuntimeSupervisor implements RuntimeResourceDriver {
       );
 
       settingsManager = fallbackSettingsManager;
-      packageManager = new DefaultPackageManager({
+      packageManager = new sdk.DefaultPackageManager({
         cwd: workspace.path,
         agentDir: this.agentDir,
         settingsManager,
       });
-      resourceLoader = new DefaultResourceLoader({
+      resourceLoader = new sdk.DefaultResourceLoader({
         cwd: workspace.path,
         agentDir: this.agentDir,
         settingsManager,
@@ -558,6 +561,7 @@ export class RuntimeSupervisor implements RuntimeResourceDriver {
     readonly accepted: ExtensionProviderRegistration[];
     readonly acceptedNative: ExtensionNativeProviderRegistration[];
   }> {
+    const { ModelRuntime } = (await loadPiSdkRuntime()).codingAgent;
     const runtime = await ModelRuntime.create({
       authPath: this.authPath,
       modelsPath: this.modelsJsonPath,
@@ -636,8 +640,10 @@ export class RuntimeSupervisor implements RuntimeResourceDriver {
         throw error;
       }
 
+      const { SettingsManager } = (await loadPiSdkRuntime()).codingAgent;
       const fallbackSettingsManager = createSettingsManagerWithoutNpmPackages(
         context.settingsManager,
+        SettingsManager,
       );
       if (!fallbackSettingsManager) {
         throw error;
@@ -649,6 +655,7 @@ export class RuntimeSupervisor implements RuntimeResourceDriver {
         }`,
       );
 
+      const { DefaultPackageManager } = (await loadPiSdkRuntime()).codingAgent;
       const fallbackPackageManager = new DefaultPackageManager({
         cwd: context.workspace.path,
         agentDir: this.agentDir,
@@ -1044,6 +1051,7 @@ async function readSkillMetadata(
 ): Promise<{ name?: string; description?: string; disableModelInvocation?: boolean } | undefined> {
   try {
     const raw = await readFile(filePath, "utf8");
+    const { parseFrontmatter, stripFrontmatter } = (await loadPiSdkRuntime()).codingAgent;
     const frontmatter = parseFrontmatter(raw) as
       | {
           name?: string;

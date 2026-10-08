@@ -1,5 +1,5 @@
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CustomProviderStore } from "./custom-provider-store.js";
 import type { RuntimeSupervisorOptions } from "./runtime-supervisor.js";
 
@@ -13,7 +13,13 @@ export interface RuntimeDependencies {
 export function createRuntimeDependencies(
   options: RuntimeSupervisorOptions = {},
 ): RuntimeDependencies {
-  const agentDir = resolve(options.agentDir ?? getAgentDir());
+  const configuredAgentDir = process.env.PI_CODING_AGENT_DIR?.trim();
+  const agentDir = resolve(
+    options.agentDir ??
+      (configuredAgentDir
+        ? configuredAgentDir.replace(/^~(?=$|[\\/])/, homedir())
+        : join(homedir(), ".pi", "agent")),
+  );
   const modelsJsonPath = join(agentDir, "models.json");
   const authPath = join(agentDir, "auth.json");
   const customProviderStore =

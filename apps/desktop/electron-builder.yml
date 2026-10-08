@@ -26,6 +26,10 @@ files:
 extraResources:
   - from: resources/icon.png
     to: icon.png
+  - from: build/pi-sdk-runtime/runtime.tgz
+    to: pi-sdk-runtime/runtime.tgz
+  - from: build/pi-sdk-runtime/runtime.tgz.sha256
+    to: pi-sdk-runtime/runtime.tgz.sha256
 
 asar: true
 asarUnpack:

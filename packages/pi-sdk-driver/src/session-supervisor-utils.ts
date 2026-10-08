@@ -1,9 +1,6 @@
 import { basename } from "node:path";
-import {
-  sessionEntryToContextMessages,
-  type SessionInfo,
-  type SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import type { SessionInfo, SessionManager } from "@earendil-works/pi-coding-agent";
+import { loadPiSdkRuntime } from "./sdk-runtime.js";
 import type {
   SessionAttachment,
   SessionConfig,
@@ -305,9 +302,10 @@ export function transcriptFromMessages(
  * Pi still selects the active branch and compaction range; its public entry
  * projector supplies the original message and summary content for that range.
  */
-export function displayMessagesFromSession(
+export async function displayMessagesFromSession(
   sessionManager: Pick<SessionManager, "buildContextEntries">,
 ) {
+  const { sessionEntryToContextMessages } = (await loadPiSdkRuntime()).codingAgent;
   return sessionManager.buildContextEntries().flatMap((entry, index) => {
     // A retained range can contain older compactions. Only the latest one,
     // which Pi places first, contributes a summary (matching Pi's projection).

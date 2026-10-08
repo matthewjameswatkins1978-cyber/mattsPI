@@ -1,16 +1,13 @@
-import {
+import type {
   SessionManager,
   SettingsManager,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  type AgentSessionRuntime,
-  type CreateAgentSessionOptions,
-  type CreateAgentSessionServicesOptions,
-  type CreateAgentSessionRuntimeResult,
-  type ModelRuntime,
+  AgentSessionRuntime,
+  CreateAgentSessionOptions,
+  CreateAgentSessionServicesOptions,
+  CreateAgentSessionRuntimeResult,
+  ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
+import { loadPiSdkRuntime } from "./sdk-runtime.js";
 
 export type PiResourceLoaderOptions = NonNullable<
   CreateAgentSessionServicesOptions["resourceLoaderOptions"]
@@ -40,6 +37,7 @@ export function isGlobalNpmLookupError(error: unknown): boolean {
 
 export function createSettingsManagerWithoutNpmPackages(
   current: SettingsManager,
+  settingsManagerFactory: Pick<typeof SettingsManager, "fromStorage">,
 ): SettingsManager | null {
   const globalSettings = current.getGlobalSettings() as Record<string, unknown>;
   const projectSettings = current.getProjectSettings() as Record<string, unknown>;
@@ -58,7 +56,7 @@ export function createSettingsManagerWithoutNpmPackages(
   const nextProjectSettings = projectChanged
     ? { ...projectSettings, packages: nextProjectPackages }
     : projectSettings;
-  return SettingsManager.fromStorage({
+  return settingsManagerFactory.fromStorage({
     withLock(scope, fn) {
       const currentJson =
         scope === "global"
@@ -77,6 +75,8 @@ async function createAgentSessionServicesWithNpmFallback(
     "settingsManager" | "modelRuntime" | "resourceLoaderOptions"
   >,
 ) {
+  const { SettingsManager, createAgentSessionServices } =
+    (await loadPiSdkRuntime()).codingAgent;
   try {
     return await createAgentSessionServices({
       cwd,
@@ -94,7 +94,10 @@ async function createAgentSessionServicesWithNpmFallback(
 
     const currentSettingsManager =
       options?.settingsManager ?? SettingsManager.create(cwd, agentDir);
-    const fallbackSettingsManager = createSettingsManagerWithoutNpmPackages(currentSettingsManager);
+    const fallbackSettingsManager = createSettingsManagerWithoutNpmPackages(
+      currentSettingsManager,
+      SettingsManager,
+    );
     if (!fallbackSettingsManager) {
       throw error;
     }
@@ -123,6 +126,7 @@ async function createAgentSessionResultWithNpmFallback(
   sessionManager: SessionManager,
   options?: PiCreateAgentSessionOptions,
 ): Promise<CreateAgentSessionRuntimeResult> {
+  const { createAgentSessionFromServices } = (await loadPiSdkRuntime()).codingAgent;
   const services = await createAgentSessionServicesWithNpmFallback(cwd, agentDir, options);
   const model = options?.model ?? options?.resolveInitialModel?.(services.modelRuntime);
   return {
@@ -144,6 +148,8 @@ async function createAgentSessionResultWithNpmFallback(
 export async function createAgentSessionRuntimeWithNpmFallback(
   options?: PiCreateAgentSessionOptions,
 ): Promise<AgentSessionRuntime> {
+  const { SessionManager, createAgentSessionRuntime, getAgentDir } =
+    (await loadPiSdkRuntime()).codingAgent;
   const cwd = options?.cwd ?? process.cwd();
   const agentDir = options?.agentDir ?? getAgentDir();
   const initialSessionManager = options?.sessionManager ?? SessionManager.create(cwd);

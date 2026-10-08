@@ -1,14 +1,7 @@
 import { join } from "node:path";
-import {
-  SessionManager,
-  SettingsManager,
-  createExtensionRuntime,
-  createAgentSession,
-  ModelRuntime,
-  type CreateAgentSessionOptions,
-  type ResourceLoader,
-} from "@earendil-works/pi-coding-agent";
+import type { CreateAgentSessionOptions, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import type { SessionModelSelection, WorkspaceRef } from "@pi-gui/session-driver";
+import { loadPiSdkRuntime } from "./sdk-runtime.js";
 import { messageText as sessionMessageText } from "./session-supervisor-utils.js";
 
 export interface GenerateThreadTitleOptions {
@@ -42,11 +35,14 @@ export async function generateThreadTitle(
     return null;
   }
 
+  const { SessionManager, SettingsManager, createExtensionRuntime, createAgentSession, ModelRuntime } =
+    (await loadPiSdkRuntime()).codingAgent;
+
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false },
     retry: { enabled: false },
   });
-  const resourceLoader = createThreadTitleResourceLoader();
+  const resourceLoader = createThreadTitleResourceLoader(createExtensionRuntime);
   const modelRuntime = await ModelRuntime.create({
     authPath: join(deps.agentDir, "auth.json"),
     modelsPath: join(deps.agentDir, "models.json"),
@@ -101,7 +97,9 @@ export async function generateThreadTitle(
   }
 }
 
-function createThreadTitleResourceLoader(): ResourceLoader {
+function createThreadTitleResourceLoader(
+  createExtensionRuntime: typeof import("@earendil-works/pi-coding-agent").createExtensionRuntime,
+): ResourceLoader {
   return {
     getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
     getSkills: () => ({ skills: [], diagnostics: [] }),

@@ -119,7 +119,7 @@ await test("model context edits preserve original desktop history and fork targe
   await supervisor.closeSession(snapshot.ref);
 });
 
-await test("display projection preserves compaction ranges and original tool results", () => {
+await test("display projection preserves compaction ranges and original tool results", async () => {
   const manager = SessionManager.inMemory();
   manager.appendMessage({ role: "user", content: "summarized question", timestamp: Date.now() });
   const keptId = manager.appendMessage({
@@ -143,7 +143,7 @@ await test("display projection preserves compaction ranges and original tool res
   manager.appendCompaction("first summary", keptId, 1000);
   manager.appendCompaction("latest summary", keptId, 2000);
   manager.appendContextEdit(toolId, { content: "redacted model content" });
-  const transcript = transcriptFromMessages(displayMessagesFromSession(manager));
+  const transcript = transcriptFromMessages(await displayMessagesFromSession(manager));
   assert.equal(
     transcript.some((item) => item.kind === "message" && item.text === "summarized question"),
     false,

@@ -11,7 +11,8 @@
     "build:deps": "pnpm --dir ../.. --filter @pi-gui/session-driver --filter @pi-gui/pi-sdk-driver --filter @pi-gui/extension-ui --filter @pi-gui/catalogs run build",
     "build:notification-helper": "node scripts/build-notification-status-helper.mjs",
     "dev": "node scripts/dev.mjs",
-    "build": "pnpm run build:deps && pnpm run build:notification-helper && electron-vite build",
+    "build": "pnpm run build:deps && pnpm run build:notification-helper && pnpm run build:sdk-runtime && electron-vite build",
+    "build:sdk-runtime": "node scripts/build-pi-sdk-runtime.mjs",
     "preview": "pnpm run build:deps && pnpm run build:notification-helper && electron-vite preview",
     "start": "pnpm run preview",
     "package": "pnpm run build && electron-builder --mac --publish never",
@@ -96,7 +97,6 @@
     "@aws-sdk/xml-builder": "^3.972.33",
     "@aws/lambda-invoke-store": "^0.2.2",
     "@earendil-works/chord": "catalog:pi-sdk",
-    "@earendil-works/pi-coding-agent": "catalog:pi-sdk",
     "@google/genai": "2.21.0",
     "@mistralai/mistralai": "2.2.6",
     "@opentelemetry/api": "1.9.0",
@@ -153,6 +153,7 @@
     "remark-gfm": "^4.0.1",
     "retry": "^0.13.1",
     "semver": "7.8.5",
+    "tar": "^7.5.10",
     "shebang-command": "^2.0.0",
     "strip-ansi": "^7.2.0",
     "tslib": "^2.6.2",
@@ -163,6 +164,7 @@
     "yargs": "^16.2.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:pi-sdk",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",

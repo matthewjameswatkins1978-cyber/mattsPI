@@ -1,20 +1,21 @@
 import { access, realpath, stat, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
-import {
+import type {
   ModelRegistry,
   ModelRuntime,
   SessionManager,
-  type AgentSessionRuntime,
-  type AgentSession,
-  type AgentSessionEvent,
-  type CreateAgentSessionOptions,
-  type InlineExtension,
-  type ExtensionCommandContextActions,
-  type ExtensionUIDialogOptions,
-  type ExtensionUIContext,
-  type ExtensionWidgetOptions,
-  type SessionInfo,
+  AgentSessionRuntime,
+  AgentSession,
+  AgentSessionEvent,
+  CreateAgentSessionOptions,
+  InlineExtension,
+  ExtensionCommandContextActions,
+  ExtensionUIDialogOptions,
+  ExtensionUIContext,
+  ExtensionWidgetOptions,
+  SessionInfo,
 } from "@earendil-works/pi-coding-agent";
+import { loadPiSdkRuntime } from "./sdk-runtime.js";
 import type { SessionCatalogSnapshot, WorkspaceCatalogSnapshot } from "@pi-gui/catalogs";
 import type {
   NavigateSessionTreeOptions,
@@ -51,7 +52,11 @@ import type { RuntimeCommandRecord } from "@pi-gui/session-driver/runtime-types"
 import { isMissingFileError, JsonCatalogStore } from "@pi-gui/catalogs/node";
 import type { SessionFileCatalogStorage } from "@pi-gui/catalogs";
 import { sessionKey } from "@pi-gui/session-driver";
-import { buildSessionSchemaInfo, readSessionFileSchemaVersion } from "./session-schema.js";
+import {
+  buildSessionSchemaInfo,
+  getRuntimeSchemaVersion,
+  readSessionFileSchemaVersion,
+} from "./session-schema.js";
 import {
   gatedBuiltinExtensions,
   type BuiltinExtension,
@@ -395,6 +400,7 @@ export class SessionSupervisor {
   }
 
   private async syncWorkspaceNow(workspace: WorkspaceRef): Promise<SyncWorkspaceResult> {
+    const { SessionManager } = (await loadPiSdkRuntime()).codingAgent;
     const infos = await SessionManager.list(workspace.path);
     const existingSessions = (await this.catalogs.sessions.listSessions(workspace.workspaceId))
       .sessions;
@@ -568,7 +574,7 @@ export class SessionSupervisor {
         return this.readTranscriptFromDisk(sessionRef);
       }
       return transcriptFromMessages(
-        displayMessagesFromSession(record.session.sessionManager),
+        await displayMessagesFromSession(record.session.sessionManager),
         record.updatedAt,
       );
     }
@@ -587,9 +593,10 @@ export class SessionSupervisor {
       throw new Error(`Session ${sessionKey(sessionRef)} has no tracked session file.`);
     }
 
+    const { SessionManager } = (await loadPiSdkRuntime()).codingAgent;
     const sessionManager = SessionManager.open(sessionFile);
     return transcriptFromMessages(
-      displayMessagesFromSession(sessionManager),
+      await displayMessagesFromSession(sessionManager),
       sessionEntry?.updatedAt,
     );
   }
@@ -617,14 +624,20 @@ export class SessionSupervisor {
     const record = this.records.get(sessionKey(sessionRef));
     if (record?.session && !record.closed) {
       const version = record.session.sessionManager.getHeader()?.version;
-      return buildSessionSchemaInfo(typeof version === "number" ? version : undefined);
+      return buildSessionSchemaInfo(
+        typeof version === "number" ? version : undefined,
+        await getRuntimeSchemaVersion(),
+      );
     }
 
     const sessionFile = await this.resolveSessionFilePath(sessionRef);
     if (!sessionFile) {
-      return buildSessionSchemaInfo(undefined);
+      return buildSessionSchemaInfo(undefined, await getRuntimeSchemaVersion());
     }
-    return buildSessionSchemaInfo(await readSessionFileSchemaVersion(sessionFile));
+    return buildSessionSchemaInfo(
+      await readSessionFileSchemaVersion(sessionFile),
+      await getRuntimeSchemaVersion(),
+    );
   }
 
   private async findSessionFileOnDisk(sessionRef: SessionRef): Promise<string | undefined> {
@@ -632,6 +645,7 @@ export class SessionSupervisor {
     if (!workspace) {
       return undefined;
     }
+    const { SessionManager } = (await loadPiSdkRuntime()).codingAgent;
     const infos = await SessionManager.list(workspace.path);
     return infos.find((info) => info.id === sessionRef.sessionId)?.path;
   }
@@ -658,6 +672,7 @@ export class SessionSupervisor {
   ): Promise<SessionSnapshot> {
     await this.registerWorkspaceRef(workspace);
 
+    const { SessionManager } = (await loadPiSdkRuntime()).codingAgent;
     const initialModel = options?.initialModel;
     const createOptions: PiCreateAgentSessionOptions = {
       ...this.baseCreateOptions(workspace, SessionManager.create(workspace.path)),
@@ -714,6 +729,7 @@ export class SessionSupervisor {
     sourceRef: SessionRef,
     options: ForkSessionOptions,
   ): Promise<ForkSessionResult> {
+    const { SessionManager } = (await loadPiSdkRuntime()).codingAgent;
     const { sourceRecord, sourceFile, branch, selectedEntry } = await this.resolveForkSource(
       sourceRef,
       options,
@@ -861,7 +877,7 @@ export class SessionSupervisor {
     const branch = sourceManager.getBranch();
     const selectedEntry = resolveForkSourceEntry(
       branch,
-      displayMessagesFromSession(sourceManager),
+      await displayMessagesFromSession(sourceManager),
       options,
     );
     if (!selectedEntry) {
@@ -1087,6 +1103,7 @@ export class SessionSupervisor {
       selection.provider,
       selection.modelId,
     );
+    const { ModelRegistry } = (await loadPiSdkRuntime()).codingAgent;
     const registry = new ModelRegistry(session.modelRuntime);
     const auth = await registry.getApiKeyAndHeaders(model);
     if (!auth.ok) {
@@ -1296,7 +1313,10 @@ export class SessionSupervisor {
     let runtime: AgentSessionRuntime;
     try {
       runtime = await this.createAgentSessionRuntimeImpl(
-        this.baseCreateOptions(workspace, SessionManager.open(sessionFile)),
+        this.baseCreateOptions(
+          workspace,
+          (await loadPiSdkRuntime()).codingAgent.SessionManager.open(sessionFile),
+        ),
       );
     } catch (error) {
       await this.releaseLeasePath(leasePath);
@@ -2142,7 +2162,7 @@ export class SessionSupervisor {
       ? (record.runningRunId ?? crypto.randomUUID())
       : undefined;
     record.config = deriveSessionConfig(session.sessionManager);
-    const displayMessages = displayMessagesFromSession(session.sessionManager);
+    const displayMessages = await displayMessagesFromSession(session.sessionManager);
     record.preview = extractPreview(displayMessages.at(-1));
     record.sessionCommands = this.collectSessionCommands(session);
     // Tree navigation and reloads change which branch pi counts.

@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { createFacetHost, type FacetHost } from "@earendil-works/chord";
+import type { FacetHost } from "@earendil-works/chord";
 import type { DesktopViewDeclaration } from "@pi-gui/extension-ui";
 import type { DesktopHostAction } from "@pi-gui/extension-ui/browser";
 import { createChordServerConnection } from "@pi-gui/extension-ui/transport";
+import { loadPiSdkRuntime } from "@pi-gui/pi-sdk-driver";
 import { sessionKey, type SessionRef } from "@pi-gui/session-driver";
 import type { DesktopExtensionViewInfo } from "../../contracts/extension-views";
 import {
@@ -381,7 +382,8 @@ export class DesktopExtensionViewOwner {
       reserved = true;
       const assets = await validateDesktopExtensionFrontend(source, declaration.frontend);
       if (!runtime.alive || !runtime.desired.has(declaration)) return;
-      const activation = createFacetHost({
+      const { chord } = await loadPiSdkRuntime();
+      const activation = chord.createFacetHost({
         facets: [declaration.backend()],
         onError: (error) =>
           this.options.onDiagnostic?.(runtime.target, declaration.source, messageOf(error)),

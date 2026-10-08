@@ -1,0 +1,19 @@
+{
+  "name": "@pi-gui/pi-sdk-runtime-bundle",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Pinned Pi SDK runtime dependency set deployed with pnpm.",
+  "dependencies": {
+    "@aws-sdk/credential-provider-node": "catalog:pi-sdk",
+    "@earendil-works/chord": "catalog:pi-sdk",
+    "@earendil-works/pi-agent-core": "catalog:pi-sdk",
+    "@earendil-works/pi-ai": "catalog:pi-sdk",
+    "@earendil-works/pi-coding-agent": "catalog:pi-sdk",
+    "@earendil-works/pi-codemode": "catalog:pi-sdk",
+    "@earendil-works/pi-mcp": "catalog:pi-sdk",
+    "@earendil-works/pi-telemetry": "catalog:pi-sdk",
+    "@earendil-works/pi-tui": "catalog:pi-sdk",
+    "@smithy/signature-v4": "catalog:pi-sdk"
+  }
+}

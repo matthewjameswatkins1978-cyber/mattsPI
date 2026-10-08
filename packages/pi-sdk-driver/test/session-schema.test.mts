@@ -4,11 +4,15 @@ import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  RUNTIME_SCHEMA_VERSION,
   buildSessionSchemaInfo,
+  getRuntimeSchemaVersion,
   readSessionFileSchemaVersion,
   schemaVersionFromHeaderLine,
 } from "../dist/session-schema.js";
+
+const RUNTIME_SCHEMA_VERSION = await getRuntimeSchemaVersion();
+const sessionSchemaInfo = (version: number | undefined) =>
+  buildSessionSchemaInfo(version, RUNTIME_SCHEMA_VERSION);
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "pi-schema-"));
@@ -33,12 +37,12 @@ function headerLine(version: number | undefined): string {
 }
 
 await test("buildSessionSchemaInfo flags only strictly-newer file versions", () => {
-  assert.equal(buildSessionSchemaInfo(RUNTIME_SCHEMA_VERSION).writtenByNewerRuntime, false);
-  assert.equal(buildSessionSchemaInfo(RUNTIME_SCHEMA_VERSION + 1).writtenByNewerRuntime, true);
-  assert.equal(buildSessionSchemaInfo(1).writtenByNewerRuntime, false);
-  assert.equal(buildSessionSchemaInfo(undefined).writtenByNewerRuntime, false);
+  assert.equal(sessionSchemaInfo(RUNTIME_SCHEMA_VERSION).writtenByNewerRuntime, false);
+  assert.equal(sessionSchemaInfo(RUNTIME_SCHEMA_VERSION + 1).writtenByNewerRuntime, true);
+  assert.equal(sessionSchemaInfo(1).writtenByNewerRuntime, false);
+  assert.equal(sessionSchemaInfo(undefined).writtenByNewerRuntime, false);
 
-  const info = buildSessionSchemaInfo(RUNTIME_SCHEMA_VERSION + 2);
+  const info = sessionSchemaInfo(RUNTIME_SCHEMA_VERSION + 2);
   assert.equal(info.fileSchemaVersion, RUNTIME_SCHEMA_VERSION + 2);
   assert.equal(info.runtimeSchemaVersion, RUNTIME_SCHEMA_VERSION);
 });
@@ -65,7 +69,7 @@ await test("current-version file is not flagged as written by a newer runtime", 
     );
     const version = await readSessionFileSchemaVersion(file);
     assert.equal(version, RUNTIME_SCHEMA_VERSION);
-    assert.equal(buildSessionSchemaInfo(version).writtenByNewerRuntime, false);
+    assert.equal(sessionSchemaInfo(version).writtenByNewerRuntime, false);
   });
 });
 
@@ -78,7 +82,7 @@ await test("a file written by a newer pi is flagged", async () => {
     );
     const version = await readSessionFileSchemaVersion(file);
     assert.equal(version, RUNTIME_SCHEMA_VERSION + 1);
-    assert.equal(buildSessionSchemaInfo(version).writtenByNewerRuntime, true);
+    assert.equal(sessionSchemaInfo(version).writtenByNewerRuntime, true);
   });
 });
 
