@@ -208,6 +208,79 @@ test("recovers persisted ui state from the backup when ui-state.json is corrupt"
   }
 });
 
+test("restores workspace and worker route from a PowerShell serialized child array", async () => {
+  test.setTimeout(90_000);
+  const userDataDir = await makeUserDataDir();
+  const workspacePath = await makeWorkspace("powershell-child-recovery");
+  const firstRun = await launchDesktop(userDataDir, {
+    initialWorkspaces: [workspacePath],
+    testMode: "background",
+  });
+  let workspaceId = "";
+  let sessionId = "";
+  try {
+    const window = await firstRun.firstWindow();
+    await createNamedThread(window, "Recovered child session");
+    const state = await getDesktopState(window);
+    workspaceId = state.selectedWorkspaceId;
+    sessionId = state.selectedSessionId;
+    expect(workspaceId).toBeTruthy();
+    expect(sessionId).toBeTruthy();
+  } finally {
+    await firstRun.close();
+  }
+
+  const uiStatePath = join(userDataDir, "ui-state.json");
+  const persisted = JSON.parse(await readFile(uiStatePath, "utf8")) as Record<string, unknown>;
+  const worker = {
+    id: "recovered-worker",
+    taskId: "stable-recovered-task",
+    role: "IMPLEMENTER",
+    model: { provider: "meta", modelId: "muse-spark-1.3-contributor" },
+    thinkingLevel: "medium",
+    environment: "local",
+    parentWorkspaceId: workspaceId,
+    parentSessionId: sessionId,
+    childWorkspaceId: workspaceId,
+    childSessionId: sessionId,
+    title: "Recovered worker",
+    goal: "Retain the selected route.",
+    status: "waiting",
+    createdAt: "2026-10-07T12:00:00.000Z",
+    updatedAt: "2026-10-07T12:01:00.000Z",
+  };
+  persisted.orchestrationChildren = {
+    Length: 1,
+    LongLength: 1,
+    Rank: 1,
+    SyncRoot: [worker],
+    IsReadOnly: false,
+    IsFixedSize: true,
+    IsSynchronized: false,
+    Count: 1,
+  };
+  await writeFile(uiStatePath, JSON.stringify(persisted, null, 2));
+
+  const secondRun = await launchDesktop(userDataDir, { testMode: "background" });
+  try {
+    const window = await secondRun.firstWindow();
+    await expect(window.getByRole("button", { name: /powershell-child-recovery/i })).toBeVisible();
+    const state = await getDesktopState(window);
+    expect(state.orchestrationChildren).toMatchObject([
+      {
+        id: worker.id,
+        taskId: worker.taskId,
+        model: worker.model,
+        thinkingLevel: worker.thinkingLevel,
+        childSessionId: sessionId,
+        status: "queued",
+      },
+    ]);
+  } finally {
+    await secondRun.close();
+  }
+});
+
 test("rejects malformed nested state without overwriting it and resumes after repair", async () => {
   test.setTimeout(90_000);
   const userDataDir = await makeUserDataDir();

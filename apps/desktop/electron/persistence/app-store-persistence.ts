@@ -178,8 +178,44 @@ function decodeWorkbenchTemplates(value: unknown): Record<string, TaskWorkbenchT
   );
 }
 
+function unwrapSerializedArray(value: unknown): unknown {
+  const record = objectRecord(value);
+  if (!record || Array.isArray(value)) return value;
+
+  const expectedKeys = [
+    "Count",
+    "IsFixedSize",
+    "IsReadOnly",
+    "IsSynchronized",
+    "Length",
+    "LongLength",
+    "Rank",
+    "SyncRoot",
+  ];
+  if (Object.keys(record).sort().join("|") !== expectedKeys.join("|")) return value;
+
+  const entries = record.SyncRoot;
+  if (!Array.isArray(entries)) return value;
+  const length = entries.length;
+  if (
+    record.Count !== length ||
+    record.Length !== length ||
+    record.LongLength !== length ||
+    record.Rank !== 1 ||
+    record.IsReadOnly !== false ||
+    record.IsFixedSize !== true ||
+    record.IsSynchronized !== false
+  )
+    return value;
+
+  return entries;
+}
+
 function validateUiState(value: unknown): Record<string, unknown> {
-  const root = objectRecord(value);
+  const parsedRoot = objectRecord(value);
+  const root: Record<string, unknown> | undefined = parsedRoot
+    ? { ...parsedRoot, orchestrationChildren: unwrapSerializedArray(parsedRoot.orchestrationChildren) }
+    : undefined;
   if (!root) throw new Error("Invalid ui-state: expected an object; original data was retained.");
   const fail = (field: string): never => {
     throw new Error(`Invalid ui-state field ${field}; original data was retained.`);

@@ -12,6 +12,19 @@ for (const invalid of [
   { version: 99, composerDraft: "future data" },
   { version: 15, composerDraftsBySession: { one: 42 } },
   { version: 15, workspaceOrder: ["valid", null] },
+  {
+    version: 19,
+    orchestrationChildren: {
+      Length: 2,
+      LongLength: 2,
+      Rank: 1,
+      SyncRoot: [null],
+      IsReadOnly: false,
+      IsFixedSize: true,
+      IsSynchronized: false,
+      Count: 2,
+    },
+  },
   { version: 15, orchestrationChildren: [null] },
   { version: 15, appGlobalModelSettings: { defaultThinkingLevel: "unknown" } },
   { version: 15, futureData: "retain" },
@@ -31,6 +44,50 @@ for (const invalid of [
     expect(await readFile(path, "utf8")).toBe(original);
   });
 }
+
+test("reads orchestration children from the PowerShell serialized-array shape", async () => {
+  const path = join(await mkdtemp(join(tmpdir(), "ui-state-powershell-array-")), "ui-state.json");
+  const child = {
+    id: "worker-omen-1",
+    taskId: "stable-omen-task",
+    role: "IMPLEMENTER",
+    model: { provider: "meta", modelId: "muse-spark-1.3-contributor" },
+    thinkingLevel: "medium",
+    environment: "local",
+    parentWorkspaceId: "D:\\Projects\\Omen",
+    parentSessionId: "omen-parent-session",
+    childWorkspaceId: "D:\\Projects\\Omen",
+    childSessionId: "omen-worker-session",
+    title: "Omen worker",
+    goal: "Resume from the verified checkpoint.",
+    status: "waiting",
+    createdAt: "2026-10-07T12:00:00.000Z",
+    updatedAt: "2026-10-07T12:01:00.000Z",
+  };
+  const wrapper = {
+    Length: 1,
+    LongLength: 1,
+    Rank: 1,
+    SyncRoot: [child],
+    IsReadOnly: false,
+    IsFixedSize: true,
+    IsSynchronized: false,
+    Count: 1,
+  };
+  await writeFile(path, JSON.stringify({ version: 19, orchestrationChildren: wrapper }));
+
+  const decoded = await readPersistedUiState(path);
+  expect(decoded.orchestrationChildren).toHaveLength(1);
+  expect(decoded.orchestrationChildren?.[0]).toMatchObject({
+    id: child.id,
+    taskId: child.taskId,
+    model: child.model,
+    thinkingLevel: child.thinkingLevel,
+    parentWorkspaceId: child.parentWorkspaceId,
+    childSessionId: child.childSessionId,
+    status: child.status,
+  });
+});
 
 test("reads v15 ui-state without lastInteractedAt and writes v18", async () => {
   const path = join(await mkdtemp(join(tmpdir(), "ui-state-recency-")), "ui-state.json");
