@@ -1,7 +1,8 @@
 import { join } from "node:path";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import {
+  createNamedThread,
   desktopShortcut,
   launchDesktop,
   makeUserDataDir,
@@ -63,12 +64,233 @@ test("settings lets the user save an API key for a built-in provider", async () 
     const enabledModels = window.locator(".settings-section", {
       has: window.locator(".settings-section__title", { hasText: "Enabled models" }),
     });
+    const openAiGroup = enabledModels.locator('[data-provider-id="openai"]');
+    await expect(openAiGroup).toContainText("Connected");
+    await openAiGroup.getByRole("button", { name: /OpenAI/ }).click();
     await expect(
       enabledModels.getByRole("switch", { name: "Enable openai/gpt-5", exact: true }),
     ).toBeChecked();
     await expect(
       enabledModels.getByRole("switch", { name: "Enable openai/gpt-4o", exact: true }),
     ).toBeChecked();
+  } finally {
+    await harness.close();
+  }
+});
+
+test("model groups preserve gateway routes, bulk selections, and the saved shortlist", async () => {
+  test.setTimeout(90_000);
+  const userDataDir = await makeUserDataDir();
+  const agentDir = join(userDataDir, "agent");
+  const workspacePath = await makeWorkspace("provider-settings-groups-workspace");
+  await seedAgentDir(agentDir, {
+    withOpenAiAuth: false,
+    withDefaultModel: false,
+    enabledModels: ["mimo-account/claude-sonnet-4", "openai/gpt-5", "deepseek/deepseek-chat"],
+  });
+  await writeFile(
+    join(agentDir, "models.json"),
+    `${JSON.stringify(
+      {
+        providers: {
+          "mimo-account": {
+            baseUrl: "https://gateway.example.test/v1",
+            api: "openai-completions",
+            apiKey: "fixture-key",
+            models: [
+              { id: "claude-sonnet-4", name: "Claude Sonnet via MiMo" },
+              { id: "claude-haiku-4", name: "Claude Haiku via MiMo" },
+            ],
+          },
+          deepseek: {
+            baseUrl: "https://deepseek.example.test/v1",
+            api: "openai-completions",
+            apiKey: "fixture-key",
+            models: [{ id: "deepseek-chat" }],
+          },
+          openai: {
+            baseUrl: "https://openai.example.test/v1",
+            api: "openai-completions",
+            apiKey: "fixture-key",
+            models: [{ id: "gpt-5" }],
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
+  const launch = () =>
+    launchDesktop(userDataDir, {
+      agentDir,
+      initialWorkspaces: [workspacePath],
+      scrubProviderEnv: true,
+      testMode: "background",
+    });
+  let harness = await launch();
+  try {
+    let window = await harness.firstWindow();
+    await createNamedThread(window, "Provider grouping shortlist test");
+    await window.keyboard.press(desktopShortcut(","));
+    await expect(window.getByTestId("settings-surface")).toBeVisible();
+    await window.getByRole("button", { name: "Models", exact: true }).click();
+
+    const models = window.getByTestId("settings-model-list");
+    const gateway = models.locator('[data-provider-id="mimo-account"]');
+    const deepSeek = models.locator('[data-provider-id="deepseek"]');
+    await expect(gateway).toHaveAttribute("data-selection", "some");
+    await expect(gateway).toContainText("Connected");
+    await expect(gateway).toContainText("1 of 2 enabled");
+    await expect(deepSeek).toHaveAttribute("data-selection", "some");
+    await expect(models.locator("[data-provider-id]").first()).toHaveAttribute(
+      "data-provider-id",
+      "deepseek",
+    );
+
+    const gatewayToggle = gateway.getByRole("button", { name: /mimo-account/ });
+    await expect(gatewayToggle).toHaveAttribute("aria-expanded", "false");
+    await gatewayToggle.click();
+    await expect(
+      gateway.getByRole("switch", {
+        name: "Enable mimo-account/claude-sonnet-4",
+        exact: true,
+      }),
+    ).toBeChecked();
+    await expect(
+      gateway.getByRole("switch", {
+        name: "Enable mimo-account/claude-haiku-4",
+        exact: true,
+      }),
+    ).not.toBeChecked();
+
+    await gateway.getByRole("button", { name: "Enable all", exact: true }).click();
+    await expect(gateway).toHaveAttribute("data-selection", "all");
+    const haikuSwitch = gateway.getByRole("switch", {
+      name: "Enable mimo-account/claude-haiku-4",
+      exact: true,
+    });
+    await expect(haikuSwitch).toBeChecked();
+    await haikuSwitch.click();
+    await expect(gateway).toHaveAttribute("data-selection", "some");
+
+    await gateway.getByRole("button", { name: "Disable all", exact: true }).click();
+    await expect(gateway).toHaveAttribute("data-selection", "none");
+    await expect(deepSeek).toHaveAttribute("data-selection", "some");
+    await deepSeek.getByRole("button", { name: /deepseek/i }).click();
+    await expect(
+      models.getByRole("switch", { name: "Enable deepseek/deepseek-chat", exact: true }),
+    ).toBeChecked();
+
+    await window.getByLabel("Search models").fill("Claude Sonnet via MiMo");
+    await expect(gateway).toBeVisible();
+    await expect(gateway.getByRole("button", { name: /mimo-account/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect(
+      gateway.getByRole("switch", {
+        name: "Enable mimo-account/claude-sonnet-4",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await window.getByLabel("Search models").fill("");
+
+    if (process.env.PI_APP_PROVIDER_GROUPS_PROOF_DIR) {
+      await mkdir(process.env.PI_APP_PROVIDER_GROUPS_PROOF_DIR, { recursive: true });
+      await window.screenshot({
+        path: join(process.env.PI_APP_PROVIDER_GROUPS_PROOF_DIR, "provider-groups-after.png"),
+        fullPage: true,
+      });
+    }
+
+    await harness.close();
+    harness = await launch();
+    window = await harness.firstWindow();
+    await window.keyboard.press(desktopShortcut(","));
+    await window.getByRole("button", { name: "Models", exact: true }).click();
+    const restored = window.getByTestId("settings-model-list");
+    await expect(restored.locator('[data-provider-id="mimo-account"]')).toHaveAttribute(
+      "data-selection",
+      "none",
+    );
+    const restoredDeepSeek = restored.locator('[data-provider-id="deepseek"]');
+    await expect(restoredDeepSeek).toHaveAttribute("data-selection", "some");
+    await restoredDeepSeek.getByRole("button", { name: /deepseek/i }).click();
+    await expect(
+      restoredDeepSeek.getByRole("switch", {
+        name: "Enable deepseek/deepseek-chat",
+        exact: true,
+      }),
+    ).toBeChecked();
+
+    await window.getByRole("button", { name: "Back to app", exact: true }).click();
+    const modelBadge = window.locator(".composer__bar .model-selector__badge").first();
+    await expect(modelBadge).toBeVisible();
+    await modelBadge.click();
+    const picker = window.locator(".composer__bar .model-selector__dropdown").first();
+    await expect(picker).toBeVisible();
+    await expect(picker).toContainText("deepseek-chat");
+    await expect(picker).toContainText("gpt-5");
+    await expect(picker).not.toContainText("claude-sonnet-4");
+  } finally {
+    await harness.close();
+  }
+});
+
+test("provider bulk disable cannot turn an empty all-enabled list into none or all", async () => {
+  test.setTimeout(60_000);
+  const userDataDir = await makeUserDataDir();
+  const agentDir = join(userDataDir, "agent");
+  const workspacePath = await makeWorkspace("provider-settings-empty-patterns-workspace");
+  await seedAgentDir(agentDir, {
+    withOpenAiAuth: false,
+    withDefaultModel: false,
+    enabledModels: [],
+  });
+  await writeFile(
+    join(agentDir, "models.json"),
+    `${JSON.stringify(
+      {
+        providers: {
+          "review-gateway": {
+            baseUrl: "https://gateway.example.test/v1",
+            api: "openai-completions",
+            apiKey: "fixture-key",
+            models: [{ id: "model-one" }, { id: "model-two" }],
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
+  const harness = await launchDesktop(userDataDir, {
+    agentDir,
+    initialWorkspaces: [workspacePath],
+    scrubProviderEnv: true,
+    testMode: "background",
+  });
+  try {
+    const window = await harness.firstWindow();
+    await window.keyboard.press(desktopShortcut(","));
+    await window.getByRole("button", { name: "Models", exact: true }).click();
+    const group = window
+      .getByTestId("settings-model-list")
+      .locator('[data-provider-id="review-gateway"]');
+    await expect(group).toHaveAttribute("data-selection", "all");
+    await expect(group.getByRole("button", { name: "Disable all", exact: true })).toBeDisabled();
+    await group.getByRole("button", { name: /review-gateway/i }).click();
+    if (process.env.PI_APP_PROVIDER_GROUPS_PROOF_DIR) {
+      await mkdir(process.env.PI_APP_PROVIDER_GROUPS_PROOF_DIR, { recursive: true });
+      await window.screenshot({
+        path: join(process.env.PI_APP_PROVIDER_GROUPS_PROOF_DIR, "provider-groups-after.png"),
+        fullPage: true,
+      });
+    }
   } finally {
     await harness.close();
   }
@@ -228,6 +450,10 @@ test("opening the first workspace from the empty state hydrates provider and mod
     const enabledModels = window.locator(".settings-section", {
       has: window.locator(".settings-section__title", { hasText: "Enabled models" }),
     });
+    await enabledModels
+      .locator('[data-provider-id="openai"]')
+      .getByRole("button", { name: /openai/i })
+      .click();
     await expect(
       enabledModels.getByRole("switch", { name: "Enable openai/gpt-5", exact: true }),
     ).toBeChecked();

@@ -43,10 +43,14 @@ export function SettingsModelsSection({
 }: SettingsModelsSectionProps) {
   const [query, setQuery] = useState("");
   const [showUnconnected, setShowUnconnected] = useState(false);
+  const [expandedProviders, setExpandedProviders] = useState<ReadonlySet<string>>(() => new Set());
 
   const models = runtime?.models ?? [];
   const availableModels = models.filter((model) => model.available);
   const unconnectedModels = models.filter((model) => !model.available);
+  const providerById = new Map(
+    (runtime?.providers ?? []).map((provider) => [provider.id, provider]),
+  );
 
   // No saved patterns means pi enables every available model.
   const savedPatterns = runtime?.settings.enabledModelPatterns ?? [];
@@ -67,12 +71,146 @@ export function SettingsModelsSection({
   const visibleAvailable = filterModels(availableModels, query);
   const visibleUnconnected = filterModels(unconnectedModels, query);
 
+  const groupModels = (items: readonly RuntimeModelRecord[]) => {
+    const groups = new Map<string, RuntimeModelRecord[]>();
+    for (const model of items) {
+      const group = groups.get(model.providerId) ?? [];
+      group.push(model);
+      groups.set(model.providerId, group);
+    }
+    return [...groups.entries()]
+      .map(([providerId, groupModels]) => {
+        const provider = providerById.get(providerId);
+        return {
+          providerId,
+          name: provider?.name ?? groupModels[0]?.providerName ?? providerId,
+          connected: provider?.hasAuth ?? groupModels.some((model) => model.available),
+          models: groupModels,
+        };
+      })
+      .sort(
+        (left, right) =>
+          Number(right.connected) - Number(left.connected) || left.name.localeCompare(right.name),
+      );
+  };
+
   const setEnabled = (pattern: string, enabled: boolean) => {
     const next = enabled
-      ? [...activePatterns, pattern]
+      ? [...new Set([...activePatterns, pattern])]
       : activePatterns.filter((entry) => entry !== pattern);
     if (next.length > 0) onSetScopedModelPatterns(next);
   };
+
+  const setProviderEnabled = (providerModels: readonly RuntimeModelRecord[], enabled: boolean) => {
+    const providerPatterns = new Set(providerModels.map(modelPattern));
+    const next = enabled
+      ? [...new Set([...activePatterns, ...providerPatterns])]
+      : activePatterns.filter((pattern) => !providerPatterns.has(pattern));
+    // Persisting [] means "all available" to Pi, so never use it to mean "none".
+    if (next.length > 0) onSetScopedModelPatterns(next);
+  };
+
+  const toggleProvider = (providerId: string) => {
+    setExpandedProviders((current) => {
+      const next = new Set(current);
+      if (next.has(providerId)) next.delete(providerId);
+      else next.add(providerId);
+      return next;
+    });
+  };
+
+  const renderProviderGroups = (
+    items: readonly RuntimeModelRecord[],
+    options: { readonly controls: boolean; readonly listId: string },
+  ) =>
+    groupModels(items).map((group) => {
+      const patterns = group.models.map(modelPattern);
+      const enabledCount = patterns.filter((pattern) => activeSet.has(pattern)).length;
+      const selection =
+        enabledCount === 0 ? "none" : enabledCount === patterns.length ? "all" : "some";
+      const expanded = searching || expandedProviders.has(group.providerId);
+      const panelId = `${options.listId}-${group.providerId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+      const enabledOutsideGroup = activePatterns.some((pattern) => !patterns.includes(pattern));
+
+      return (
+        <div
+          className="settings-provider-group"
+          data-provider-id={group.providerId}
+          data-selection={selection}
+          key={group.providerId}
+        >
+          <div className="settings-provider-group__header">
+            <button
+              aria-controls={panelId}
+              aria-expanded={expanded}
+              className="settings-provider-group__toggle"
+              onClick={() => toggleProvider(group.providerId)}
+              type="button"
+            >
+              <span aria-hidden="true" className="settings-provider-group__chevron">
+                {expanded ? "▾" : "▸"}
+              </span>
+              <span className="settings-provider-group__identity">
+                <span className="settings-provider-group__name">{group.name}</span>
+                <span className="settings-provider-group__meta">
+                  {group.connected ? "Connected" : "Not connected"} · {enabledCount} of{" "}
+                  {group.models.length} enabled
+                </span>
+              </span>
+              <span aria-label={`${selection} selected`} className="settings-provider-group__state">
+                {selection === "all" ? "All" : selection === "some" ? "Some" : "None"}
+              </span>
+            </button>
+            {options.controls ? (
+              <div className="settings-provider-group__actions">
+                <button
+                  className="button button--secondary"
+                  disabled={enabledCount === group.models.length}
+                  onClick={() => setProviderEnabled(group.models, true)}
+                  type="button"
+                >
+                  Enable all
+                </button>
+                <button
+                  className="button button--secondary"
+                  disabled={enabledCount === 0 || !enabledOutsideGroup}
+                  onClick={() => setProviderEnabled(group.models, false)}
+                  type="button"
+                >
+                  Disable all
+                </button>
+              </div>
+            ) : null}
+          </div>
+          {expanded ? (
+            <div className="settings-provider-group__models" id={panelId}>
+              {group.models.map((model) => {
+                const pattern = modelPattern(model);
+                const enabled = activeSet.has(pattern);
+                return (
+                  <ModelRow
+                    isDefault={
+                      model.providerId === defaultProvider && model.modelId === defaultModelId
+                    }
+                    key={pattern}
+                    model={model}
+                  >
+                    {options.controls ? (
+                      <SettingsSwitch
+                        checked={enabled}
+                        disabled={enabled && !activePatterns.some((entry) => entry !== pattern)}
+                        label={`Enable ${pattern}`}
+                        onChange={(next) => setEnabled(pattern, next)}
+                      />
+                    ) : null}
+                  </ModelRow>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      );
+    });
 
   return (
     <>
@@ -142,26 +280,7 @@ export function SettingsModelsSection({
               </span>
             </div>
           ) : (
-            visibleAvailable.map((model) => {
-              const pattern = modelPattern(model);
-              const enabled = activeSet.has(pattern);
-              return (
-                <ModelRow
-                  isDefault={
-                    model.providerId === defaultProvider && model.modelId === defaultModelId
-                  }
-                  key={pattern}
-                  model={model}
-                >
-                  <SettingsSwitch
-                    checked={enabled}
-                    disabled={enabled && activePatterns.length <= 1}
-                    label={`Enable ${pattern}`}
-                    onChange={(next) => setEnabled(pattern, next)}
-                  />
-                </ModelRow>
-              );
-            })
+            renderProviderGroups(visibleAvailable, { controls: true, listId: "enabled-models" })
           )}
         </div>
       </section>
@@ -182,9 +301,10 @@ export function SettingsModelsSection({
           </p>
           {searching || showUnconnected ? (
             <div className="settings-group" data-testid="settings-unconnected-model-list">
-              {visibleUnconnected.map((model) => (
-                <ModelRow isDefault={false} key={modelPattern(model)} model={model} />
-              ))}
+              {renderProviderGroups(visibleUnconnected, {
+                controls: false,
+                listId: "unconnected-models",
+              })}
             </div>
           ) : (
             <button
