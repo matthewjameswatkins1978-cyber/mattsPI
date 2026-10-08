@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, readdir } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, readdir, symlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import {
@@ -15,8 +15,8 @@ import {
 } from "../helpers/electron-app";
 
 const rabbitStateType = "rabbit-pi-compactor-state-v1";
-const expectedRabbitCommit = "cadba3a93f6197db1ef2c4d73f75985f436184c0";
-const expectedCompactCommit = "b9fe82d76faf13d80cab23a44c1a445c33a3ffd6";
+const expectedRabbitCommit = "5c77738a2b9cd25bf086127bb453a35e4a420421";
+const expectedCompactCommit = "b3702b1b9ccdb6b5ca3405d73ef23e06618d1ef4";
 
 interface RabbitState {
   readonly mode: "auto" | "manual" | "off";
@@ -29,8 +29,8 @@ interface LocalIntegrationManifest {
     readonly compact: { readonly commit: string };
   };
   readonly artifacts: {
-    readonly rabbit: { readonly file: string; readonly sha256: string };
-    readonly compact: { readonly file: string; readonly sha256: string };
+    readonly rabbit: { readonly file: string; readonly sha256: string; readonly packagePath: string };
+    readonly compact: { readonly file: string; readonly sha256: string; readonly packagePath: string };
   };
 }
 
@@ -41,6 +41,15 @@ test("loads the pinned compaction artifacts and persists Rabbit Settings across 
   const agentDir = join(root, "runs", randomUUID(), "agent");
   await mkdir(agentDir, { recursive: true });
   await copyFile(join(root, "agent", "settings.json"), join(agentDir, "settings.json"));
+  for (const name of ["models.json", "models-store.json", "studio-models.json"]) {
+    await copyFile(join(root, "agent", name), join(agentDir, name));
+  }
+  const npmCachePath = join(root, "agent", "npm");
+  if (process.platform === "win32") {
+    await symlink(npmCachePath, join(agentDir, "npm"), "junction");
+  } else {
+    await cp(npmCachePath, join(agentDir, "npm"), { recursive: true });
+  }
   const artifactDir = join(root, "artifacts");
   const manifest = JSON.parse(
     await readFile(join(root, "manifest.json"), "utf8"),
@@ -66,6 +75,17 @@ test("loads the pinned compaction artifacts and persists Rabbit Settings across 
   try {
     let window = await harness.firstWindow();
     const workspace = await waitForWorkspaceByPath(window, workspacePath);
+    const profileRuntime = (await getDesktopState(window)).runtimeByWorkspace[workspace.id];
+    expect(profileRuntime?.settings).toMatchObject({
+      defaultProvider: "qwen-token-plan",
+      defaultModelId: "qwen3.8-flash",
+      defaultThinkingLevel: "medium",
+    });
+    expect(
+      profileRuntime?.models.some(
+        (model) => model.providerId === "qwen-token-plan" && model.modelId === "qwen3.8-flash",
+      ),
+    ).toBe(true);
     await expect
       .poll(async () => {
         const runtime = (await getDesktopState(window)).runtimeByWorkspace[workspace.id];
@@ -73,8 +93,8 @@ test("loads the pinned compaction artifacts and persists Rabbit Settings across 
           extension.path.replaceAll("\\", "/"),
         );
         return {
-          rabbit: paths.some((path) => path.includes("/packages/rabbit/src/index.ts")),
-          compact: paths.some((path) => path.includes("/packages/codex-compact/dist/index.ts")),
+          rabbit: paths.includes(resolve(manifest.artifacts.rabbit.packagePath, "src/index.ts").replaceAll("\\", "/")),
+          compact: paths.includes(resolve(manifest.artifacts.compact.packagePath, "dist/index.ts").replaceAll("\\", "/")),
           command: (runtime?.extensions ?? []).some(
             (extension) => extension.enabled && extension.commands.includes("rabbit"),
           ),
@@ -173,7 +193,8 @@ async function expectRabbitStatus(
       .at(-1)?.label;
   };
   await expect.poll(statusLabel).toContain(`mode: ${expectedMode}`);
-  await expect.poll(statusLabel).toContain("context: unknown");
+  await expect.poll(statusLabel).toMatch(/context: (unknown|\d[\d,]* \/ [\d,]+ effective \([\d.]+%\))/);
+  await expect.poll(statusLabel).toContain("window 1,000,000, output reserve 16,384");
 }
 
 async function openRabbitSettings(window: Page): Promise<void> {

@@ -14,11 +14,11 @@ import { spawnSync } from "node:child_process";
 
 const expected = {
   rabbit: {
-    commit: "cadba3a93f6197db1ef2c4d73f75985f436184c0",
+    commit: "5c77738a2b9cd25bf086127bb453a35e4a420421",
     packageDirectory: "packages/rabbit",
   },
   compact: {
-    commit: "b9fe82d76faf13d80cab23a44c1a445c33a3ffd6",
+    commit: "b3702b1b9ccdb6b5ca3405d73ef23e06618d1ef4",
     packageDirectory: "packages/codex-compact",
   },
 };
