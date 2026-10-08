@@ -15,7 +15,11 @@ import {
 import { isValidHttpBaseUrl } from "@pi-gui/pi-sdk-driver";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
-import type { AgentToolResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionContext,
+  ExtensionToolContext,
+} from "@earendil-works/pi-coding-agent";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -315,7 +319,7 @@ async function runOrchestrationRuntimeToolForTest(
   );
 }
 
-function createTestExtensionContext(sessionRef: SessionRef): ExtensionContext {
+function createTestExtensionContext(sessionRef: SessionRef): ExtensionToolContext {
   const workspace = store
     .snapshot()
     .workspaces.find(
@@ -348,6 +352,10 @@ function createTestExtensionContext(sessionRef: SessionRef): ExtensionContext {
     getContextUsage: () => undefined,
     compact: () => undefined,
     getSystemPrompt: () => "",
+    tools: [],
+    executeTool: async () => {
+      throw new Error("Nested tools are unavailable in desktop runtime test contexts");
+    },
   };
 }
 const OPEN_FOLDER_MENU_ITEM_ID = "file.open-folder";

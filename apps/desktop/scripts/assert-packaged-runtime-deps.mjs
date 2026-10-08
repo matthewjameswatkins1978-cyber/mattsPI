@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import semver from "semver";
+import YAML from "yaml";
 
 const requiredPackages = [
   // Keep packaging-sensitive runtime transitive deps explicit; electron-builder
@@ -105,13 +106,21 @@ const notificationHelperPath =
     : undefined;
 const pnpmBinary = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const piCodingAgentPackageName = "@earendil-works/pi-coding-agent";
-const requiredPiCodingAgentVersion = "0.87.1";
+const workspaceManifest = YAML.parse(
+  readFileSync(path.resolve(desktopDir, "../..", "pnpm-workspace.yaml"), "utf8"),
+);
+const requiredPiCodingAgentVersion = String(
+  workspaceManifest.catalogs?.["pi-sdk"]?.[piCodingAgentPackageName] ?? "",
+);
+if (!requiredPiCodingAgentVersion) {
+  throw new Error("The pnpm pi-sdk catalog must declare the Pi SDK runtime version.");
+}
 const modelChecks = [
   ...["openai", "openai-codex", "github-copilot"].flatMap((provider) =>
     ["sol", "luna"].map((variant) => ({
       provider,
       id: `gpt-6-${variant}`,
-      reason: "Pi 0.87.1 GPT-6 support",
+      reason: "Pi SDK GPT-6 support",
       requireReasoning: true,
       requireImageInput: true,
       requireMaxThinking: true,

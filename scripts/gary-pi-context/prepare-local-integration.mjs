@@ -239,7 +239,6 @@ async function main() {
       missionDirectory,
       credentialsCopied: false,
     },
-    desktopRuntime: "0.87.1",
   };
   await writeFile(join(outputRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   process.stdout.write(`${JSON.stringify({ outputRoot, manifest: join(outputRoot, "manifest.json") }, null, 2)}\n`);

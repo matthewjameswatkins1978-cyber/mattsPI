@@ -3,6 +3,33 @@ packages:
   - packages/*
   - video
 
+# Single version authority for the Pi runtime. Update this catalog and the lockfile together.
+catalogs:
+  pi-sdk:
+    "@aws-sdk/credential-provider-node": 3.972.83
+    "@earendil-works/chord": 1.1.0
+    "@earendil-works/pi-agent-core": 1.1.0
+    "@earendil-works/pi-ai": 1.1.0
+    "@earendil-works/pi-coding-agent": 1.1.0
+    "@earendil-works/pi-codemode": 1.1.0
+    "@earendil-works/pi-mcp": 1.1.0
+    "@earendil-works/pi-telemetry": 1.1.0
+    "@earendil-works/pi-tui": 1.1.0
+    "@smithy/signature-v4": 5.7.3
+
+# Constrain upstream ranges to the same tested Pi SDK release family.
+overrides:
+  "@aws-sdk/credential-provider-node": "catalog:pi-sdk"
+  "@earendil-works/chord": "catalog:pi-sdk"
+  "@earendil-works/pi-agent-core": "catalog:pi-sdk"
+  "@earendil-works/pi-ai": "catalog:pi-sdk"
+  "@earendil-works/pi-coding-agent": "catalog:pi-sdk"
+  "@earendil-works/pi-codemode": "catalog:pi-sdk"
+  "@earendil-works/pi-mcp": "catalog:pi-sdk"
+  "@earendil-works/pi-telemetry": "catalog:pi-sdk"
+  "@earendil-works/pi-tui": "catalog:pi-sdk"
+  "@smithy/signature-v4": "catalog:pi-sdk"
+
 onlyBuiltDependencies:
   - "@google/genai"
   - electron

@@ -13,7 +13,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "^0.87.0",
-    "@earendil-works/pi-coding-agent": "^0.87.0"
+    "@earendil-works/pi-ai": "catalog:pi-sdk",
+    "@earendil-works/pi-coding-agent": "catalog:pi-sdk"
   }
 }
