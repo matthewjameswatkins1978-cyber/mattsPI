@@ -19,6 +19,7 @@ import { SettingsModelsSection } from "./settings-models-section";
 import { SettingsNotificationsSection } from "./settings-notifications-section";
 import { SettingsProvidersSection } from "./settings-providers-section";
 import { type SettingsSection, settingsSectionDefinition } from "./settings-sections";
+import { SettingsRabbitSection } from "./settings-rabbit-section";
 import { SettingsShortcutsSection } from "./settings-shortcuts-section";
 
 export type { SettingsSection } from "./settings-sections";
@@ -26,6 +27,8 @@ export type { SettingsSection } from "./settings-sections";
 interface SettingsViewProps {
   readonly workspace?: WorkspaceRecord;
   readonly runtime?: RuntimeSnapshot;
+  readonly rabbitSessionAvailable: boolean;
+  readonly onRunRabbitCommand: (command: string) => Promise<string | undefined>;
   readonly section: SettingsSection;
   readonly platform: NodeJS.Platform;
   /** Shown beside the page title, such as the workspace a page edits. */
@@ -64,6 +67,8 @@ interface SettingsViewProps {
 export function SettingsView({
   workspace,
   runtime,
+  rabbitSessionAvailable,
+  onRunRabbitCommand,
   section,
   platform,
   headerAccessory,
@@ -157,6 +162,17 @@ export function SettingsView({
           ) : null}
 
           {section === "shortcuts" ? <SettingsShortcutsSection platform={platform} /> : null}
+          {section === "context" ? (
+            <SettingsRabbitSection
+              commandAvailable={Boolean(
+                runtime?.extensions.some(
+                  (extension) => extension.enabled && extension.commands.includes("rabbit"),
+                ),
+              )}
+              sessionAvailable={rabbitSessionAvailable}
+              onRunCommand={onRunRabbitCommand}
+            />
+          ) : null}
 
           {section === "providers" ? (
             <SettingsProvidersSection

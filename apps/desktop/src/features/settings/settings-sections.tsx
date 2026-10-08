@@ -60,6 +60,15 @@ export const SETTINGS_SECTIONS = [
     needsWorkspace: false,
   },
   {
+    id: "context",
+    title: "Context & compaction",
+    group: "Agent",
+    icon: <PlugIcon />,
+    keywords: ["rabbit", "context window", "compaction", "manual threshold", "output reserve"],
+    description: () => "Configure Rabbit's context compaction for a selected session.",
+    needsWorkspace: true,
+  },
+  {
     id: "providers",
     title: "Providers",
     group: "Agent",

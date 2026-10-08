@@ -2114,6 +2114,26 @@
   color: var(--text-strong);
 }
 
+.settings-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-soft);
+  font-size: 12.5px;
+}
+
+.settings-number input {
+  box-sizing: border-box;
+  width: 64px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-strong);
+  font: inherit;
+}
+
 .settings-select-control {
   position: relative;
   display: inline-flex;

@@ -72,6 +72,13 @@ export function SecondarySurfaces({
     ? snapshot.runtimeByWorkspace[settingsWorkspace.id]
     : undefined;
   const settingsModelRuntime = getEffectiveModelRuntime(snapshot, settingsWorkspace);
+  const rabbitSessionAvailable =
+    Boolean(settingsWorkspace) &&
+    snapshot.selectedWorkspaceId === settingsWorkspace?.id &&
+    Boolean(snapshot.selectedSessionId) &&
+    Boolean(
+      settingsWorkspace?.sessions.some((session) => session.id === snapshot.selectedSessionId),
+    );
   const skillsRuntime = skillsWorkspace
     ? snapshot.runtimeByWorkspace[skillsWorkspace.id]
     : undefined;
@@ -110,6 +117,18 @@ export function SecondarySurfaces({
       console.error("[renderer] refreshNotificationPermissionStatus failed", error);
     });
   }, [activeView, refreshNotificationPermissionStatus, settingsSection]);
+
+  const handleRunRabbitCommand = async (command: string): Promise<string | undefined> => {
+    if (!settingsWorkspace) return "Select a workspace first.";
+    if (!rabbitSessionAvailable) return "Select a thread in this workspace first.";
+    const state = await updateSnapshot(setSnapshot, () =>
+      api.submitComposerToTarget(`/rabbit ${command}`, {
+        workspaceId: settingsWorkspace.id,
+        sessionId: snapshot.selectedSessionId,
+      }),
+    );
+    return state.lastError;
+  };
 
   const handleSetDefaultModel = (provider: string, modelId: string) => {
     if (!settingsWorkspace) {
@@ -418,6 +437,8 @@ export function SecondarySurfaces({
               : undefined
           }
           section={settingsSection}
+          rabbitSessionAvailable={rabbitSessionAvailable}
+          onRunRabbitCommand={handleRunRabbitCommand}
           notificationPreferences={snapshot.notificationPreferences}
           notificationPermissionStatus={notificationPermissionStatus}
           notificationPermissionPending={notificationPermissionPending}
