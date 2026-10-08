@@ -49,6 +49,7 @@ Use this skill when the user wants a short demo workflow.
 
     await window.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(window.locator(".settings-view")).toBeVisible();
+    await expect(window.locator(".settings-view")).toContainText("Gary Pi");
     await expect(window.getByText("Notifications", { exact: true })).toBeVisible();
     await expect(window.locator(".settings-view")).toContainText("Skill slash commands");
     const skillCommandsToggle = window.getByRole("switch", {

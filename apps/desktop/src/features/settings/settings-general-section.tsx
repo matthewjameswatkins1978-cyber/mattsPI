@@ -35,6 +35,10 @@ export function SettingsGeneralSection({
 
   return (
     <>
+      <SettingsGroup title="Gary Pi">
+        <SettingsRow title="Application" description="Gary Pi desktop with the managed Pi SDK runtime." />
+      </SettingsGroup>
+
       <SettingsGroup title="Agent">
         <SettingsRow
           title="Model settings scope"
