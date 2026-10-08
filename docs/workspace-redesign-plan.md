@@ -1,6 +1,6 @@
 # Workspace redesign: implementation design
 
-Status: **implemented and verified within the documented macOS scope**, September 22, 2026. P0.0–P0.2 have the historical proof below; P0.3/P0.4 review/capture and P1.1/P1.2 extension views passed the final baseline, Core Electron, real-provider and local packaged-app gates. See the [verification report](workspace-redesign-verification.md) for exact evidence and limits. This is not a published/notarized release or Windows/Linux verification. The approved tabbed prototype and installed Pi/Chord `0.87.1` are the current baseline; the earlier blocks-first protocol proposal is superseded.
+Status: **implemented and verified within the documented macOS scope**, September 22, 2026. P0.0–P0.2 have the historical proof below; P0.3/P0.4 review/capture and P1.1/P1.2 extension views passed the final baseline, Core Electron, real-provider and local packaged-app gates. See the [verification report](workspace-redesign-verification.md) for exact evidence and limits. This is not a published/notarized release or Windows/Linux verification. The approved tabbed prototype and Pi/Chord `0.87.1` references document the September 22 milestone; current source uses the catalog-managed external Pi SDK 1.1.0 runtime. The earlier blocks-first protocol proposal is superseded.
 
 ## Recommendation
 

@@ -79,12 +79,23 @@ async function loadRuntime(): Promise<PiSdkRuntime> {
   return { codingAgent, chord, manifest, directory: runtimeDirectory };
 }
 
-export async function verifyPiSdkRuntimeDirectory(directory: string): Promise<{
+export async function verifyPiSdkRuntimeDirectory(
+  directory: string,
+  expectedSdkVersion?: string,
+): Promise<{
   readonly manifest: PiSdkRuntimeManifest;
   readonly codingAgent: typeof import("@earendil-works/pi-coding-agent");
   readonly chord: typeof import("@earendil-works/chord");
 }> {
   const manifest = await readManifest(directory);
+  if (expectedSdkVersion && manifest.sdkVersion !== expectedSdkVersion) {
+    throw new Error(
+      "Managed Pi SDK " +
+        manifest.sdkVersion +
+        " does not match expected catalog version " +
+        expectedSdkVersion,
+    );
+  }
   if (manifest.runtimeApiVersion !== PI_SDK_RUNTIME_API_VERSION) {
     throw new Error(
       `Pi SDK runtime API ${manifest.runtimeApiVersion} is incompatible with app API ${PI_SDK_RUNTIME_API_VERSION}`,

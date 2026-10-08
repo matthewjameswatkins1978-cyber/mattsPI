@@ -1548,9 +1548,10 @@ function markInitialPromptDeliveryFailed(
   const credentialActionRequired = workerFailureNeedsCredentialAction({ message });
   if (isInfrastructureFailure && existing?.infrastructureFailure) return;
   const retryCount = existing?.infrastructureFailure?.retryCount ?? 0;
-  const retryAt = isInfrastructureFailure && !credentialActionRequired
-    ? workerInfrastructureRetryAt(retryCount, new Date(now))
-    : undefined;
+  const retryAt =
+    isInfrastructureFailure && !credentialActionRequired
+      ? workerInfrastructureRetryAt(retryCount, new Date(now))
+      : undefined;
   store.replaceOrchestrationChildren(
     store.orchestrationState().orchestrationChildren.map((child) =>
       child.id === childThreadId

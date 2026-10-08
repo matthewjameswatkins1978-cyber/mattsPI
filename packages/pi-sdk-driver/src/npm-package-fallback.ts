@@ -75,8 +75,7 @@ async function createAgentSessionServicesWithNpmFallback(
     "settingsManager" | "modelRuntime" | "resourceLoaderOptions"
   >,
 ) {
-  const { SettingsManager, createAgentSessionServices } =
-    (await loadPiSdkRuntime()).codingAgent;
+  const { SettingsManager, createAgentSessionServices } = (await loadPiSdkRuntime()).codingAgent;
   try {
     return await createAgentSessionServices({
       cwd,
@@ -148,8 +147,8 @@ async function createAgentSessionResultWithNpmFallback(
 export async function createAgentSessionRuntimeWithNpmFallback(
   options?: PiCreateAgentSessionOptions,
 ): Promise<AgentSessionRuntime> {
-  const { SessionManager, createAgentSessionRuntime, getAgentDir } =
-    (await loadPiSdkRuntime()).codingAgent;
+  const { SessionManager, createAgentSessionRuntime, getAgentDir } = (await loadPiSdkRuntime())
+    .codingAgent;
   const cwd = options?.cwd ?? process.cwd();
   const agentDir = options?.agentDir ?? getAgentDir();
   const initialSessionManager = options?.sessionManager ?? SessionManager.create(cwd);

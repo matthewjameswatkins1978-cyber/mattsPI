@@ -1,13 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import {
-  cp,
-  mkdir,
-  readFile,
-  readdir,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, sep, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -91,7 +84,10 @@ function assertCleanHead(repository, expectedCommit, label) {
 
 function isInside(path, parent) {
   const relation = relative(resolve(parent).toLowerCase(), resolve(path).toLowerCase());
-  return relation === "" || (!isAbsolute(relation) && !relation.startsWith(`..${sep}`) && relation !== "..");
+  return (
+    relation === "" ||
+    (!isAbsolute(relation) && !relation.startsWith(`..${sep}`) && relation !== "..")
+  );
 }
 
 async function assertSafeOutput(outputRoot) {
@@ -105,7 +101,8 @@ async function assertSafeOutput(outputRoot) {
   }
   try {
     const contents = await readdir(outputRoot);
-    if (contents.length > 0) throw new Error(`Output must be a new or empty directory: ${outputRoot}`);
+    if (contents.length > 0)
+      throw new Error(`Output must be a new or empty directory: ${outputRoot}`);
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
@@ -122,7 +119,11 @@ function npmPack(cwd, artifactDirectory) {
 }
 
 async function installDependencies(packageDirectory) {
-  run("npm", ["install", "--ignore-scripts", "--omit=dev", "--package-lock=true"], packageDirectory);
+  run(
+    "npm",
+    ["install", "--ignore-scripts", "--omit=dev", "--package-lock=true"],
+    packageDirectory,
+  );
   const lockBytes = run("npm", ["ls", "--omit=dev", "--json"], packageDirectory);
   const lock = JSON.parse(lockBytes);
   const dependencies = Object.fromEntries(
@@ -170,7 +171,10 @@ async function main() {
   run("npm", ["run", "build"], join(extensionsRepo, "packages", "pi-codex-compact"));
 
   const rabbitPack = npmPack(rabbitRepo, artifactDirectory);
-  const compactPack = npmPack(join(extensionsRepo, "packages", "pi-codex-compact"), artifactDirectory);
+  const compactPack = npmPack(
+    join(extensionsRepo, "packages", "pi-codex-compact"),
+    artifactDirectory,
+  );
   const rabbitTarball = join(artifactDirectory, rabbitPack.filename);
   const compactTarball = join(artifactDirectory, compactPack.filename);
 
@@ -240,8 +244,14 @@ async function main() {
       credentialsCopied: false,
     },
   };
-  await writeFile(join(outputRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  process.stdout.write(`${JSON.stringify({ outputRoot, manifest: join(outputRoot, "manifest.json") }, null, 2)}\n`);
+  await writeFile(
+    join(outputRoot, "manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
+  process.stdout.write(
+    `${JSON.stringify({ outputRoot, manifest: join(outputRoot, "manifest.json") }, null, 2)}\n`,
+  );
 }
 
 main().catch((error) => {

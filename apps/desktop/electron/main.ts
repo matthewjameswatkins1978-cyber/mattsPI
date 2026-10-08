@@ -940,7 +940,8 @@ if (augmentedPath.changed) {
 app.setName("Gary Pi");
 app.setAppUserModelId("com.matthew-way.gary-pi");
 
-const configuredUserDataDir = process.env.PI_APP_USER_DATA_DIR?.trim() || path.join(app.getPath("appData"), "Gary Pi");
+const configuredUserDataDir =
+  process.env.PI_APP_USER_DATA_DIR?.trim() || path.join(app.getPath("appData"), "Gary Pi");
 const configuredWorktreeRoot = process.env.PI_APP_WORKTREE_ROOT?.trim();
 app.setPath("userData", configuredUserDataDir);
 if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
@@ -963,7 +964,9 @@ app.on("before-quit", (event) => {
   const release = coordinatorLockRelease;
   coordinatorLockRelease = undefined;
   void release()
-    .catch((error: unknown) => console.error("[main] Failed to release coordinator ownership", error))
+    .catch((error: unknown) =>
+      console.error("[main] Failed to release coordinator ownership", error),
+    )
     .finally(() => app.quit());
 });
 if (!hasSingleInstanceLock) {
@@ -992,11 +995,11 @@ app
     }
 
     const testCoordinatorLockPath = process.env.PI_APP_TEST_MODE
-      ? process.env.PI_APP_COORDINATOR_LOCK_PATH?.trim() || path.join(configuredUserDataDir, "coordinator-owner")
+      ? process.env.PI_APP_COORDINATOR_LOCK_PATH?.trim() ||
+        path.join(configuredUserDataDir, "coordinator-owner")
       : undefined;
     const coordinatorLockPath =
-      testCoordinatorLockPath ??
-      path.join(app.getPath("appData"), "Gary Pi", "coordinator-owner");
+      testCoordinatorLockPath ?? path.join(app.getPath("appData"), "Gary Pi", "coordinator-owner");
     try {
       await mkdir(coordinatorLockPath, { recursive: true });
       coordinatorLockRelease = await properLockfile.lock(coordinatorLockPath, {
