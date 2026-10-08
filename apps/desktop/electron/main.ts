@@ -938,9 +938,12 @@ if (augmentedPath.changed) {
 
 app.setName("pi");
 
-const configuredUserDataDir = process.env.PI_APP_USER_DATA_DIR?.trim() || app.getPath("userData");
+const configuredUserDataDir = process.env.PI_APP_USER_DATA_DIR?.trim() || path.join(app.getPath("appData"), "Gary Pi");
 const configuredWorktreeRoot = process.env.PI_APP_WORKTREE_ROOT?.trim();
 app.setPath("userData", configuredUserDataDir);
+if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
+  process.env.PI_CODING_AGENT_DIR = path.join(configuredUserDataDir, "agent");
+}
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
