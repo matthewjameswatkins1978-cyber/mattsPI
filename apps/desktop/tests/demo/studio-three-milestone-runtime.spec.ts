@@ -493,6 +493,9 @@ function createImplementer(taskId: ImplementerTaskId): ScriptedResponse {
     prompt: implementerPrompt(taskId),
     task_id: taskId,
     role: "IMPLEMENTER",
+    provider: "studio-fixture",
+    model_id: "scripted",
+    thinking_level: "off",
     environment: "worktree",
   });
 }
@@ -506,6 +509,9 @@ function createInspector(state: CoordinatorState, taskId: string): ScriptedRespo
     prompt: inspectorPrompt(taskId, worktreePath, branch),
     task_id: taskId,
     role: "INDEPENDENT_INSPECTOR",
+    provider: "studio-fixture",
+    model_id: "scripted",
+    thinking_level: "off",
     environment: "local",
   });
 }

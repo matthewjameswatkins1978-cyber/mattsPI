@@ -1,13 +1,23 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDocument } from "yaml";
+import YAML from "yaml";
 
 const PRODUCT_NAME = "pi-gui";
 const SCHEMA_VERSION = 1;
 const PLATFORMS = ["macos", "linux", "windows"];
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const workspace = YAML.parse(
+  readFileSync(path.join(repositoryRoot, "pnpm-workspace.yaml"), "utf8"),
+);
+const piSdkVersion = workspace.catalogs?.["pi-sdk"]?.["@earendil-works/pi-coding-agent"];
+if (typeof piSdkVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(piSdkVersion)) {
+  throw new Error("The Pi SDK catalog version is invalid.");
+}
+const piSdkRuntimeArchive = `pi-sdk-runtime-${piSdkVersion}.tgz`;
 
 function platformSpec(platform, version) {
   const base = `${PRODUCT_NAME}-${version}`;
@@ -49,6 +59,8 @@ function platformSpec(platform, version) {
           { name: `${base}-x64-setup.exe.blockmap`, role: "installer-blockmap" },
           { name: `${base}-x64-portable.exe`, role: "portable" },
           { name: "latest.yml", role: "update-manifest" },
+          { name: piSdkRuntimeArchive, role: "pi-sdk-runtime" },
+          { name: `${piSdkRuntimeArchive}.sha256`, role: "pi-sdk-runtime-integrity" },
         ],
       };
     default:
@@ -196,6 +208,17 @@ async function verifyUpdateManifest(inputDir, platform, version) {
   }
 }
 
+async function verifyPiSdkRuntimeAsset(inputDir, platform) {
+  if (platform !== "windows") return;
+  const archivePath = path.join(inputDir, piSdkRuntimeArchive);
+  const sidecarPath = `${archivePath}.sha256`;
+  const digest = await hashFile(archivePath);
+  const recorded = (await readFile(sidecarPath, "utf8")).trim();
+  if (recorded !== `sha256:${digest.sha256}`) {
+    throw new Error(`${path.basename(sidecarPath)} does not match ${piSdkRuntimeArchive}`);
+  }
+}
+
 function validateVersion(version) {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
     throw new Error(`Invalid release version: ${version}`);
@@ -244,6 +267,7 @@ export async function stageArtifacts({ platform, version, commit, inputDir, outp
   }
 
   await verifyUpdateManifest(outputDir, platform, version);
+  await verifyPiSdkRuntimeAsset(outputDir, platform);
   const manifest = await buildPlatformManifest(outputDir, platform, version, commit);
   await writeFile(
     path.join(outputDir, spec.manifestName),
@@ -305,6 +329,7 @@ async function verifyPlatformArtifacts({ platform, version, commit, inputDir }) 
   }
 
   await verifyUpdateManifest(inputDir, platform, version);
+  await verifyPiSdkRuntimeAsset(inputDir, platform);
   return manifest;
 }
 

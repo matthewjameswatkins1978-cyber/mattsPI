@@ -242,6 +242,15 @@ jobs:
             -PackagedApp "$PWD/apps/desktop/release/win-unpacked/pi-gui.exe" `
             -SmokePackages
 
+      - name: Add versioned Pi SDK runtime release asset
+        shell: pwsh
+        run: |
+          $runtimeFiles = @(Get-ChildItem apps/desktop/build/pi-sdk-runtime -Filter 'pi-sdk-runtime-*.tgz' -File)
+          if ($runtimeFiles.Count -ne 1) { throw "Expected one Pi SDK runtime archive, found $($runtimeFiles.Count)." }
+          $archive = $runtimeFiles[0]
+          Copy-Item $archive.FullName apps/desktop/release
+          Copy-Item "$($archive.FullName).sha256" apps/desktop/release
+
       - name: Stage validated Windows artifacts
         shell: bash
         run: |

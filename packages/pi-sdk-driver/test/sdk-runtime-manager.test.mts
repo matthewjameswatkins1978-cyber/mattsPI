@@ -146,6 +146,47 @@ test("bad release integrity or app compatibility leaves the active runtime uncha
   }
 });
 
+test("a stable release without a Pi SDK runtime asset leaves the bootstrap runtime usable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gary-pi-sdk-no-release-asset-"));
+  try {
+    const runtimeRoot = join(root, "profile", "pi-sdk");
+    const seed = join(root, "seed");
+    await createFakeRuntime(seed, "1.1.0", 1);
+    const bootstrapArchivePath = join(root, "runtime.tgz");
+    const digest = await createPiSdkRuntimeArchive(seed, bootstrapArchivePath);
+    const bootstrapDigestPath = `${bootstrapArchivePath}.sha256`;
+    await writeFile(bootstrapDigestPath, `sha256:${digest}\n`);
+    const options = { runtimeRoot, appVersion: "1.0.1", bootstrapArchivePath, bootstrapDigestPath };
+
+    assert.deepEqual(await preparePiSdkRuntime(options), {
+      directory: runtimeRoot,
+      version: "1.1.0",
+    });
+    await markPiSdkRuntimeHealthy(runtimeRoot, "1.1.0");
+
+    let requests = 0;
+    const result = await checkAndStagePiSdkRuntimeUpdate({
+      ...options,
+      releasesUrl: "https://api.github.com/repos/test/latest",
+      fetcher: async () => {
+        requests += 1;
+        return Response.json({ draft: false, prerelease: false, assets: [] });
+      },
+    });
+
+    assert.deepEqual(result, { status: "no-update", currentVersion: "1.1.0" });
+    assert.equal(requests, 1);
+    assert.equal(
+      JSON.parse(await readFile(join(runtimeRoot, "current.json"), "utf8")).directory,
+      "1.1.0",
+    );
+    await assert.rejects(readFile(join(runtimeRoot, "pending.json")));
+    await assert.rejects(readFile(join(runtimeRoot, "activation.json")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function createFakeRuntime(
   directory: string,
   version: string,

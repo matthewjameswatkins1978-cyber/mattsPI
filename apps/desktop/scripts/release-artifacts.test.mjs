@@ -51,6 +51,19 @@ async function createFixture(root, platform, override = {}) {
     }
   }
 
+  if (platform === "windows") {
+    const runtime = expectedFiles(platform, VERSION).find(
+      (name) => name.startsWith("pi-sdk-runtime-") && name.endsWith(".tgz"),
+    );
+    const runtimeDigestFile = `${runtime}.sha256`;
+    const runtimeDigest = await hashFile(path.join(source, runtime));
+    await writeFile(
+      path.join(source, runtimeDigestFile),
+      `sha256:${runtimeDigest.sha256}\n`,
+      "utf8",
+    );
+  }
+
   const files = [];
   for (const name of updateAssets(platform)) {
     const digest = await hashFile(path.join(source, name));
@@ -204,6 +217,24 @@ test("rejects latest.yml when it selects the portable executable", async () => {
       outputDir: path.join(root, "staged"),
     }),
     /unexpected payload|primary path/,
+  );
+});
+
+test("rejects a Pi SDK runtime integrity sidecar that does not match the archive", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pi-gui-release-sdk-runtime-tamper-"));
+  const source = await createFixture(root, "windows");
+  const sidecar = expectedFiles("windows", VERSION).find((name) => name.endsWith(".tgz.sha256"));
+  await writeFile(path.join(source, sidecar), `sha256:${"0".repeat(64)}\n`, "utf8");
+
+  await assert.rejects(
+    stageArtifacts({
+      platform: "windows",
+      version: VERSION,
+      commit: COMMIT,
+      inputDir: source,
+      outputDir: path.join(root, "staged"),
+    }),
+    /does not match pi-sdk-runtime-/,
   );
 });
 

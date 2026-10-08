@@ -25,6 +25,7 @@ const runtimeDirectory = path.join(outputRoot, sdkVersion);
 const archivePath = path.join(outputRoot, `pi-sdk-runtime-${sdkVersion}.tgz`);
 const bootstrapArchivePath = path.join(outputRoot, "runtime.tgz");
 const digestPath = `${bootstrapArchivePath}.sha256`;
+const releaseDigestPath = `${archivePath}.sha256`;
 mkdirSync(outputRoot, { recursive: true });
 if (!existsSync(path.join(runtimeDirectory, "node_modules"))) {
   mkdirSync(path.dirname(runtimeDirectory), { recursive: true });
@@ -83,4 +84,5 @@ const { createPiSdkRuntimeArchive } = await import(
 const digest = await createPiSdkRuntimeArchive(runtimeDirectory, archivePath);
 copyFileSync(archivePath, bootstrapArchivePath);
 writeFileSync(digestPath, `sha256:${digest}\n`);
+writeFileSync(releaseDigestPath, `sha256:${digest}\n`);
 console.log(`Built external Pi SDK ${sdkVersion} runtime (${archivePath})`);

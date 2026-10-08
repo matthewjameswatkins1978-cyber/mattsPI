@@ -1,5 +1,14 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import {
+  access,
+  copyFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -145,6 +154,10 @@ export async function launchDesktop(
   options: readonly string[] | LaunchDesktopOptions = [],
 ): Promise<DesktopHarness> {
   const normalized = normalizeLaunchOptions(options);
+  const testExecutable = process.env.PI_APP_TEST_EXECUTABLE?.trim();
+  if (testExecutable) {
+    return launchDesktopByExecutable(testExecutable, userDataDir, normalized);
+  }
   const agentDir = await prepareAgentDir(userDataDir, normalized);
   const env = buildDesktopLaunchEnv(userDataDir, agentDir, normalized);
   // Playwright's Electron video recorder can stall loadURL on Linux, leaving a
@@ -192,6 +205,7 @@ export async function launchPackagedDesktop(
   const env = buildDesktopLaunchEnv(userDataDir, agentDir, normalized);
   const releaseDir = resolvePackagedReleaseDir(process.env.PI_APP_TEST_RELEASE_DIR);
   const executablePath = await resolvePackagedAppExecutable(releaseDir);
+  await seedPiSdkRuntimeForTest(userDataDir);
   return launchDesktopExecutable(executablePath, env);
 }
 
@@ -203,7 +217,38 @@ export async function launchDesktopByExecutable(
   const normalized = normalizeLaunchOptions(options);
   const agentDir = await prepareAgentDir(userDataDir, normalized);
   const env = buildDesktopLaunchEnv(userDataDir, agentDir, normalized);
+  await seedPiSdkRuntimeForTest(userDataDir);
   return launchDesktopExecutable(executablePath, env);
+}
+
+async function seedPiSdkRuntimeForTest(userDataDir: string): Promise<void> {
+  const sourceDirectory = process.env.PI_APP_TEST_SDK_RUNTIME_DIR?.trim();
+  if (!sourceDirectory) return;
+
+  const version = sourceDirectory.split(/[\\/]/).filter(Boolean).at(-1);
+  if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
+    throw new Error("PI_APP_TEST_SDK_RUNTIME_DIR must point to a versioned runtime directory.");
+  }
+  const runtimeRoot = join(userDataDir, "pi-sdk");
+  const runtimeDirectory = join(runtimeRoot, version);
+  const pointerPath = join(runtimeRoot, "current.json");
+  try {
+    await access(pointerPath);
+    return;
+  } catch (error) {
+    if (error instanceof Error && !("code" in error && error.code === "ENOENT")) throw error;
+  }
+  try {
+    await access(runtimeDirectory);
+    throw new Error(
+      `Test SDK runtime directory already exists without a matching pointer: ${runtimeDirectory}`,
+    );
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+  }
+  await mkdir(runtimeRoot, { recursive: true });
+  await cp(sourceDirectory, runtimeDirectory, { recursive: true, errorOnExist: true });
+  await writeFile(pointerPath, `${JSON.stringify({ directory: version }, null, 2)}\n`, "utf8");
 }
 
 async function launchDesktopExecutable(
