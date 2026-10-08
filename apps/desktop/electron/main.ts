@@ -27,7 +27,8 @@ import type {
   ExtensionContext,
   ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
-import { readFile, stat } from "node:fs/promises";
+
+import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { augmentPosixPath } from "../scripts/augment-path.cjs";
@@ -945,7 +946,25 @@ if (!process.env.PI_CODING_AGENT_DIR?.trim()) {
   process.env.PI_CODING_AGENT_DIR = path.join(configuredUserDataDir, "agent");
 }
 
+type CoordinatorLockRelease = () => Promise<void>;
+type ProperLockfileApi = {
+  lock: (target: string, options?: Record<string, unknown>) => Promise<CoordinatorLockRelease>;
+};
+const properLockfile = createRequire(__filename)("proper-lockfile") as ProperLockfileApi;
+let coordinatorLockRelease: CoordinatorLockRelease | undefined;
+let coordinatorLockReleasing = false;
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+app.on("before-quit", (event) => {
+  if (!coordinatorLockRelease || coordinatorLockReleasing) return;
+  event.preventDefault();
+  coordinatorLockReleasing = true;
+  const release = coordinatorLockRelease;
+  coordinatorLockRelease = undefined;
+  void release()
+    .catch((error: unknown) => console.error("[main] Failed to release coordinator ownership", error))
+    .finally(() => app.quit());
+});
 if (!hasSingleInstanceLock) {
   // app.quit() before ready can leave a windowless macOS process alive.
   // Duplicate instances have no store or windows, so exit immediately.
@@ -968,6 +987,30 @@ app
   .whenReady()
   .then(async () => {
     if (!hasSingleInstanceLock) {
+      return;
+    }
+
+    const testCoordinatorLockPath = process.env.PI_APP_TEST_MODE
+      ? process.env.PI_APP_COORDINATOR_LOCK_PATH?.trim() || path.join(configuredUserDataDir, "coordinator-owner")
+      : undefined;
+    const coordinatorLockPath =
+      testCoordinatorLockPath ??
+      path.join(app.getPath("appData"), "Gary Pi", "coordinator-owner");
+    try {
+      await mkdir(coordinatorLockPath, { recursive: true });
+      coordinatorLockRelease = await properLockfile.lock(coordinatorLockPath, {
+        retries: 0,
+        realpath: false,
+      });
+    } catch (error) {
+      console.error("[main] Another Gary Pi coordinator owns the machine profile", error);
+      if (!process.env.PI_APP_TEST_MODE) {
+        dialog.showErrorBox(
+          "Gary Pi is already running",
+          "Another Gary Pi coordinator is already open. Close it before opening a second profile so Studio missions have one owner.",
+        );
+      }
+      app.quit();
       return;
     }
 

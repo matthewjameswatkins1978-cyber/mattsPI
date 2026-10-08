@@ -7,6 +7,7 @@ import {
   makeUserDataDir,
   makeWorkspace,
   selectSession,
+  spawnDesktopProcess,
   type DesktopHarness,
 } from "../helpers/electron-app";
 
@@ -71,5 +72,49 @@ test("a second pi-gui process cannot open a thread the first one holds", async (
   } finally {
     await second?.close();
     await first.close().catch(() => {});
+  }
+});
+
+test("a second Gary coordinator is blocked even with a different user-data override", async () => {
+  test.setTimeout(60_000);
+  const workspacePath = await makeWorkspace("coordinator-owner-workspace");
+  const agentDir = await makeUserDataDir("coordinator-owner-agent-");
+  const coordinatorLockPath = join(agentDir, "gary-coordinator-owner");
+  const first = await launchDesktop(await makeUserDataDir(), {
+    initialWorkspaces: [workspacePath],
+    agentDir,
+    testMode: "background",
+    coordinatorLockPath,
+  });
+  let second: Awaited<ReturnType<typeof spawnDesktopProcess>> | undefined;
+  try {
+    await first.firstWindow();
+    const secondUserDataDir = await makeUserDataDir();
+    second = await spawnDesktopProcess(secondUserDataDir, {
+      initialWorkspaces: [workspacePath],
+      agentDir,
+      testMode: "background",
+      coordinatorLockPath,
+    });
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        const timeout = setTimeout(() => {
+          second?.kill();
+          reject(new Error("A second coordinator stayed alive despite the shared host lock."));
+        }, 15_000);
+        second?.once("error", (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+        second?.once("exit", (code, signal) => {
+          clearTimeout(timeout);
+          resolve({ code, signal });
+        });
+      },
+    );
+    expect(exit).toMatchObject({ code: 0, signal: null });
+  } finally {
+    second?.kill();
+    await first.close();
   }
 });

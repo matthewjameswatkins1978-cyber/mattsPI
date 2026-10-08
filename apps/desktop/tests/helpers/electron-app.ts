@@ -85,6 +85,7 @@ export interface LaunchDesktopOptions {
   readonly testMode?: DesktopTestMode;
   readonly agentDir?: string;
   readonly realAuthSourceDir?: string;
+  readonly coordinatorLockPath?: string;
   readonly enabledModels?: readonly string[];
   readonly scrubProviderEnv?: boolean;
   readonly envOverrides?: Readonly<Record<string, string | undefined>>;
@@ -405,11 +406,15 @@ function buildDesktopLaunchEnv(
   // electron.exe run as plain Node and reject Chromium switches such as
   // --remote-debugging-port that Playwright's Electron launcher supplies.
   delete baseEnv.ELECTRON_RUN_AS_NODE;
+  delete baseEnv.PI_APP_COORDINATOR_LOCK_PATH;
   const env = {
     ...baseEnv,
     PI_APP_USER_DATA_DIR: userDataDir,
     PI_APP_INITIAL_WORKSPACES: (options.initialWorkspaces ?? []).join(delimiter),
     PI_APP_TEST_MODE: options.testMode ?? process.env.PI_APP_TEST_MODE ?? "foreground",
+    ...(options.coordinatorLockPath
+      ? { PI_APP_COORDINATOR_LOCK_PATH: options.coordinatorLockPath }
+      : {}),
     PI_CODING_AGENT_DIR: agentDir,
     ...(options.notificationLogPath
       ? { PI_APP_NOTIFICATION_LOG_PATH: options.notificationLogPath }

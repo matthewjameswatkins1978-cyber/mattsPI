@@ -37,6 +37,8 @@ export async function resolvePackagedAppExecutable(
 ): Promise<string> {
   if (process.platform === "win32") {
     for (const executablePath of [
+      join(releaseDir, "win-unpacked", "gary-pi.exe"),
+      join(releaseDir, "gary-pi.exe"),
       join(releaseDir, "win-unpacked", "pi-gui.exe"),
       join(releaseDir, "pi-gui.exe"),
     ]) {
