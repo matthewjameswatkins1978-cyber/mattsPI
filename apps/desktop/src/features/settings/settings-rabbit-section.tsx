@@ -19,17 +19,17 @@ export function SettingsRabbitSection({
   const validManualValue = Number.isInteger(manualValue) && manualValue >= 1 && manualValue <= 99;
   const canRun = commandAvailable && sessionAvailable && !pendingCommand;
 
-  const runCommand = async (command: string) => {
+  const runCommand = (command: string): void => {
     setPendingCommand(command);
     setMessage(undefined);
-    try {
-      const error = await onRunCommand(command);
-      setMessage(error ?? `Sent /rabbit ${command} to the selected session.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setPendingCommand(undefined);
-    }
+    void onRunCommand(command)
+      .then((error) => {
+        setMessage(error ?? `Sent /rabbit ${command} to the selected session.`);
+      })
+      .catch((error: unknown) => {
+        setMessage(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setPendingCommand(undefined));
   };
 
   return (
@@ -49,7 +49,7 @@ export function SettingsRabbitSection({
       ) : null}
       <SettingsRow
         title="Compaction mode"
-        description="Auto uses Rabbit's model-aware trigger. Off disables automatic compaction."
+        description="Auto uses Rabbit's model-aware trigger. Garden lets Gary defer or compact from mission evidence; Pi's overflow safety remains active."
       >
         <div className="settings-row__actions">
           <button
@@ -68,6 +68,15 @@ export function SettingsRabbitSection({
             onClick={() => void runCommand("mode manual")}
           >
             Manual
+          </button>
+          <button
+            aria-label="Garden context management mode"
+            className="button button--secondary"
+            disabled={!canRun}
+            type="button"
+            onClick={() => void runCommand("mode garden")}
+          >
+            Garden
           </button>
           <button
             className="button button--secondary"

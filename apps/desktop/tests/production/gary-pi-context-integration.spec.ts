@@ -15,11 +15,11 @@ import {
 } from "../helpers/electron-app";
 
 const rabbitStateType = "rabbit-pi-compactor-state-v1";
-const expectedRabbitCommit = "5c77738a2b9cd25bf086127bb453a35e4a420421";
+const expectedRabbitCommit = "36945af03ec3e2f9e7dc122091d215d829dc9226";
 const expectedCompactCommit = "b3702b1b9ccdb6b5ca3405d73ef23e06618d1ef4";
 
 interface RabbitState {
-  readonly mode: "auto" | "manual" | "off";
+  readonly mode: "auto" | "manual" | "off" | "garden";
   readonly config: { readonly thresholdOverride: number | null };
 }
 
@@ -29,8 +29,16 @@ interface LocalIntegrationManifest {
     readonly compact: { readonly commit: string };
   };
   readonly artifacts: {
-    readonly rabbit: { readonly file: string; readonly sha256: string; readonly packagePath: string };
-    readonly compact: { readonly file: string; readonly sha256: string; readonly packagePath: string };
+    readonly rabbit: {
+      readonly file: string;
+      readonly sha256: string;
+      readonly packagePath: string;
+    };
+    readonly compact: {
+      readonly file: string;
+      readonly sha256: string;
+      readonly packagePath: string;
+    };
   };
 }
 
@@ -93,8 +101,12 @@ test("loads the pinned compaction artifacts and persists Rabbit Settings across 
           extension.path.replaceAll("\\", "/"),
         );
         return {
-          rabbit: paths.includes(resolve(manifest.artifacts.rabbit.packagePath, "src/index.ts").replaceAll("\\", "/")),
-          compact: paths.includes(resolve(manifest.artifacts.compact.packagePath, "dist/index.ts").replaceAll("\\", "/")),
+          rabbit: paths.includes(
+            resolve(manifest.artifacts.rabbit.packagePath, "src/index.ts").replaceAll("\\", "/"),
+          ),
+          compact: paths.includes(
+            resolve(manifest.artifacts.compact.packagePath, "dist/index.ts").replaceAll("\\", "/"),
+          ),
           command: (runtime?.extensions ?? []).some(
             (extension) => extension.enabled && extension.commands.includes("rabbit"),
           ),
@@ -112,6 +124,9 @@ test("loads the pinned compaction artifacts and persists Rabbit Settings across 
       window.getByRole("button", { name: "Manual compaction mode", exact: true }),
     ).toBeEnabled();
     await expect(window.getByRole("button", { name: "Off", exact: true })).toBeEnabled();
+    await expect(
+      window.getByRole("button", { name: "Garden context management mode", exact: true }),
+    ).toBeEnabled();
 
     const percentage = window.getByLabel("Manual trigger percentage");
     await expect(percentage).toHaveAttribute("min", "1");
@@ -130,6 +145,10 @@ test("loads the pinned compaction artifacts and persists Rabbit Settings across 
 
     await window.getByRole("button", { name: "Off", exact: true }).click();
     await expect.poll(() => latestRabbitState(sessionDir)).toMatchObject({ mode: "off" });
+    await window
+      .getByRole("button", { name: "Garden context management mode", exact: true })
+      .click();
+    await expect.poll(() => latestRabbitState(sessionDir)).toMatchObject({ mode: "garden" });
     await window.getByRole("button", { name: "Auto", exact: true }).click();
     await expect
       .poll(() => latestRabbitState(sessionDir))
@@ -150,6 +169,12 @@ test("loads the pinned compaction artifacts and persists Rabbit Settings across 
       });
     await window.getByRole("button", { name: "Show Rabbit status" }).click();
     await expectRabbitStatus(window, "manual");
+    await window
+      .getByRole("button", { name: "Garden context management mode", exact: true })
+      .click();
+    await expect.poll(() => latestRabbitState(sessionDir)).toMatchObject({ mode: "garden" });
+    await window.getByRole("button", { name: "Show Rabbit status" }).click();
+    await expectRabbitStatus(window, "garden");
   } finally {
     await harness.close();
   }
@@ -166,6 +191,8 @@ test("loads the pinned compaction artifacts and persists Rabbit Settings across 
     await window.getByRole("button", { name: "Back to app" }).click();
     await waitForSelectedSessionReady(window, { sessionId, workspaceId: workspace.id });
     await openRabbitSettings(window);
+    await window.getByRole("button", { name: "Show Rabbit status" }).click();
+    await expectRabbitStatus(window, "garden");
     await window.getByRole("button", { name: "Manual compaction mode", exact: true }).click();
     await expect
       .poll(() => latestRabbitState(sessionDir))
@@ -182,18 +209,22 @@ test("loads the pinned compaction artifacts and persists Rabbit Settings across 
 
 async function expectRabbitStatus(
   window: Page,
-  expectedMode: "auto" | "manual" | "off",
+  expectedMode: "auto" | "manual" | "off" | "garden",
 ): Promise<void> {
-  const statusLabel = async () => {
+  const statusLabel = async (): Promise<string | undefined> => {
     const transcript = await getSelectedTranscript(window);
-    return transcript?.transcript
-      .filter(
+    const messages = transcript?.transcript as unknown as
+      readonly { readonly kind: string; readonly label: string }[] | undefined;
+    return messages
+      ?.filter(
         (message) => message.kind === "activity" && message.label.includes("RABBIT PI COMPACTOR"),
       )
       .at(-1)?.label;
   };
   await expect.poll(statusLabel).toContain(`mode: ${expectedMode}`);
-  await expect.poll(statusLabel).toMatch(/context: (unknown|\d[\d,]* \/ [\d,]+ effective \([\d.]+%\))/);
+  await expect
+    .poll(statusLabel)
+    .toMatch(/context: (unknown|\d[\d,]* \/ [\d,]+ effective \([\d.]+%\))/);
   await expect.poll(statusLabel).toContain("window 1,000,000, output reserve 16,384");
 }
 
