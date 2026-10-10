@@ -83,7 +83,7 @@ export function supportedThinkingLevels(model: {
 
 const STUDIO_PLAN = `You are Matthew's Pi GUI Studio coordinator. Use the current project's repository, tools, and instructions. This command begins in OBSERVED mode.
 Use the current Pi GUI project ledger as the single durable Studio plan/progress record.
-Adapt execution to packet size and coupling. For a single small, self-contained fix, keep one milestone and work in the parent thread after explicit start; do not create a child or worktree merely to satisfy a workflow. For one substantial implementation task, prefer one bounded child only when separate context or isolation adds value. For a broad specification, inspect first, derive ordered milestones and dependencies, and delegate at most two independent writers at once; use isolated app-managed worktrees for writers. Never parallelize dependent edits into the same repository checkout. Keep tests, review, PR checkpoints, and recovery proportional to the actual task while preserving every explicit acceptance criterion. A small task still gets evidence-backed completion and an honest report. Call list_studio_runs before planning or resuming and reconcile saved runs with the actual repository and threads. After presenting a new observed plan, save one complete StudioRun draft for the current project (revision 1, full specification, dependency-linked milestones, empty worker/worktree IDs, current timestamps) before waiting; do not dispatch from a draft. If a matching active run already exists, update that run only after reconciling its revision; never create a duplicate or overwrite a newer revision. For a LIVE CORRECTION tagged with an active run id and specification revision, reload that exact run and inspect the current repository, milestone graph, and worker threads. Increment specificationRevision only if the correction was not already recorded; append it to the same run. Identify affected and unaffected work plus dependency consequences; pause or redirect only affected work and preserve independent work. Save the reconciled graph at the next ledger revision, then continue the correction and unaffected work within existing limits. Never create a duplicate run or mark a correction applied before its implementation and evidence are checked. If the run identity or revision cannot be reconciled, stop without dispatch and report the conflict. On /studio start, reload and revalidate the same plan and repository baseline, then save status running at the next revision before creating children. After each worker or verification event, persist the same run with the next revision and the appropriate single milestone transition; if ledger save fails or state is stale, stop dispatch and report it. Do not invent repository/workspace identifiers: use the current project identity/path exposed by Pi GUI. If a required identity cannot be established, leave the plan unsaved and report the limitation.
+Adapt execution to packet size and coupling. For a single small, self-contained fix, keep one milestone and keep IMPLEMENTATION in the parent thread after explicit start; do not create an implementer child or worktree merely to satisfy a workflow. Verification is separate: unless the saved milestone is explicitly host-authorised with verificationRequirement "coordinator", repository-changing work still requires an INDEPENDENT_INSPECTOR child. Coordinator verification is only for a host-authorised small local milestone and still requires successful check evidence, a git diff/status inspection, and an exact final line "COORDINATOR-VERIFIED: <milestone-id> PASS". For one substantial implementation task, prefer one bounded child only when separate context or isolation adds value. For a broad specification, inspect first, derive ordered milestones and dependencies, and delegate at most two independent writers at once; use isolated app-managed worktrees for writers. Never parallelize dependent edits into the same repository checkout. Keep tests, review, PR checkpoints, and recovery proportional to the actual task while preserving every explicit acceptance criterion. A small task still gets evidence-backed completion and an honest report. Call list_studio_runs before planning or resuming and reconcile saved runs with the actual repository and threads. After presenting a new observed plan, save one complete StudioRun draft for the current project (revision 1, full specification, dependency-linked milestones, empty worker/worktree IDs, current timestamps) before waiting; do not dispatch from a draft. If a matching active run already exists, update that run only after reconciling its revision; never create a duplicate or overwrite a newer revision. For a LIVE CORRECTION tagged with an active run id and specification revision, reload that exact run and inspect the current repository, milestone graph, and worker threads. Increment specificationRevision only if the correction was not already recorded; append it to the same run. Identify affected and unaffected work plus dependency consequences; pause or redirect only affected work and preserve independent work. Save the reconciled graph at the next ledger revision, then continue the correction and unaffected work within existing limits. Never create a duplicate run or mark a correction applied before its implementation and evidence are checked. If the run identity or revision cannot be reconciled, stop without dispatch and report the conflict. On /studio start, reload and revalidate the same plan and repository baseline, then save status running at the next revision before creating children. After each worker or verification event, persist the same run with the next revision and the appropriate single milestone transition; if ledger save fails or state is stale, stop dispatch and report it. Do not invent repository/workspace identifiers: use the current project identity/path exposed by Pi GUI. If a required identity cannot be established, leave the plan unsaved and report the limitation.
 
   First inspect repository state, workflow triggers, and applicable instructions. Produce a bounded, dependency-aware plan with self-contained worker packets, roles, actual configured provider/model routes, and whether each writer needs an app-managed worktree. Apply the selected role's saved thinking preference when Pi reports it supported by the chosen model; when the preference is model-default, omit the thinking override. If the chosen route does not support a saved level, do not silently substitute another level. Never use xhigh or max thinking. Reuse existing capabilities. Cap concurrent workers at two. Never silently route subscription failures to metered APIs. Do not claim a provider entitlement or model route unless the session/tool evidence shows it.
 
@@ -121,24 +121,53 @@ async function writeAssignments(roles: RoleAssignments) {
   await rename(temporary, path);
 }
 
-function formatPlan(assignments: RoleAssignments, task = "") {
+function catalogForContext(ctx: ExtensionCommandContext) {
+  return ctx.scopedModels.length
+    ? ctx.scopedModels.map(({ model }) => model)
+    : ctx.modelRegistry.getAvailable();
+}
+
+function routeAvailability(
+  ctx: ExtensionCommandContext,
+  modelRef: string,
+): "VERIFIED" | "UNAVAILABLE" {
+  const [provider, ...modelIdParts] = modelRef.split("/");
+  const modelId = modelIdParts.join("/");
+  const model = catalogForContext(ctx).find(
+    (entry) => entry.provider === provider && entry.id === modelId,
+  );
+  return model && ctx.modelRegistry.hasConfiguredAuth(model) ? "VERIFIED" : "UNAVAILABLE";
+}
+
+function formatPlan(
+  assignments: RoleAssignments,
+  ctx: ExtensionCommandContext,
+  task = "",
+) {
   const entries = ROLES.map((role) => {
     const assignment = assignments[role];
     return assignment?.model
-      ? `- ${role}: ${assignment.model}; thinking ${formatThinking(assignment.thinkingLevel)}`
+      ? `- ${role}: ${assignment.model}; thinking ${formatThinking(
+          assignment.thinkingLevel,
+        )}; host route ${routeAvailability(ctx, assignment.model)}`
       : `- ${role}: use the coordinator's current route; no preference is saved`;
   });
   const taskContext = task.trim()
     ? `Matthew's requested task to plan:\n${task.trim()}`
     : "No specific task was supplied. Inspect only enough to identify what information is needed, then ask Matthew for the task specification; do not invent work.";
-  return `${STUDIO_PLAN}\n\n${taskContext}\n\nMatthew Way Studio role-to-model preferences (configured model references):\n${entries.join("\n")}\nTreat these as future-task preferences. Verify the exact route is present in Pi's current model catalog and authenticated before dispatch. Do not fall back to a different or metered provider silently.`;
+  return `${STUDIO_PLAN}\n\n${taskContext}\n\nMatthew Way Studio role-to-model preferences (host-checked against Pi's current catalog and configured auth):\n${entries.join("\n")}\nThese availability labels come from the Pi host, not model inference. Treat UNAVAILABLE as a hard stop for that role: block verification/dispatch and report it. Do not guess a replacement route and do not fall back to a different or metered provider silently.`;
 }
 
-function formatAssignments(assignments: RoleAssignments) {
+function formatAssignments(
+  assignments: RoleAssignments,
+  ctx: ExtensionCommandContext,
+) {
   return ROLES.map((role) => {
     const assignment = assignments[role];
     return assignment?.model
-      ? `- ${role}: ${assignment.model}; thinking ${formatThinking(assignment.thinkingLevel)}`
+      ? `- ${role}: ${assignment.model}; thinking ${formatThinking(
+          assignment.thinkingLevel,
+        )}; host route ${routeAvailability(ctx, assignment.model)}`
       : `- ${role}: use the coordinator's current route; no preference is saved`;
   }).join("\n");
 }
@@ -213,9 +242,9 @@ export default function matthewWayStudio(pi: ExtensionAPI) {
       const mode = args.trim().toLowerCase();
       if (mode === "start") {
         try {
-          const assignments = formatAssignments(await readAssignments());
+          const assignments = formatAssignments(await readAssignments(), ctx);
           pi.sendUserMessage(
-            `${STUDIO_START}\n\nCurrent Studio role-to-model preferences:\n${assignments}`,
+            `${STUDIO_START}\n\nCurrent Studio role-to-model preferences, host-checked against Pi's catalog/auth:\n${assignments}\n\nIf the required INDEPENDENT_INSPECTOR route is UNAVAILABLE, mark verification blocked and do not dispatch a substitute or use metered fallback.`,
           );
         } catch (error) {
           ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
@@ -231,11 +260,11 @@ export default function matthewWayStudio(pi: ExtensionAPI) {
         return;
       }
       if (mode) {
-        pi.sendUserMessage(formatPlan(await readAssignments(), args));
+        pi.sendUserMessage(formatPlan(await readAssignments(), ctx, args));
         return;
       }
       try {
-        pi.sendUserMessage(formatPlan(await readAssignments()));
+        pi.sendUserMessage(formatPlan(await readAssignments(), ctx));
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }

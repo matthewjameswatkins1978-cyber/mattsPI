@@ -817,6 +817,51 @@ test.describe("Studio run plan state", () => {
     ).toThrow("Existing Studio milestone identities and dependencies are immutable");
   });
 
+  test("keeps milestone verification policy host-owned and local-only for coordinator verification", () => {
+    const independentRun: StudioRun = {
+      ...run,
+      milestones: [
+        {
+          ...run.milestones[0]!,
+          deliveryRequirement: "local",
+          verificationRequirement: "independent-inspector",
+        },
+        run.milestones[1]!,
+      ],
+    };
+    expect(() =>
+      preserveStudioRunHistory(independentRun, {
+        ...independentRun,
+        milestones: [
+          {
+            ...independentRun.milestones[0]!,
+            verificationRequirement: "coordinator",
+          },
+          independentRun.milestones[1]!,
+        ],
+      }),
+    ).toThrow("identities and dependencies are immutable");
+
+    expect(() =>
+      decodeStudioRunsFile({
+        version: 1,
+        runs: [
+          {
+            ...run,
+            milestones: [
+              {
+                ...run.milestones[0]!,
+                deliveryRequirement: "github-pr",
+                verificationRequirement: "coordinator",
+              },
+              run.milestones[1]!,
+            ],
+          },
+        ],
+      }),
+    ).toThrow("Coordinator verification is allowed only");
+  });
+
   test("gates dispatch while paused and does not allow premature completion", () => {
     const paused = transitionStudioRun(run, "paused");
     expect(availableStudioMilestones(paused)).toEqual([]);

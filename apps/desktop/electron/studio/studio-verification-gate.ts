@@ -2,6 +2,7 @@ import type {
   OrchestrationChildThread,
   OrchestrationChildTranscriptMessage,
   OrchestrationEvidenceRecord,
+  TranscriptMessage,
 } from "../../contracts/desktop-state";
 import type { StudioMilestone, StudioRun } from "../../contracts/studio-runs";
 
@@ -9,14 +10,98 @@ export function assertNewStudioMilestoneCompletionsHaveEvidence(
   current: StudioRun | undefined,
   next: StudioRun,
   children: readonly OrchestrationChildThread[],
+  coordinatorTranscript: readonly TranscriptMessage[] = [],
 ): void {
   for (const milestone of next.milestones) {
     const wasComplete =
       current?.milestones.find(({ id }) => id === milestone.id)?.status === "complete";
     if (milestone.status === "complete" && !wasComplete) {
-      assertStudioMilestoneHasIndependentVerification(next, milestone, children);
+      if (milestone.verificationRequirement === "coordinator") {
+        assertStudioMilestoneHasCoordinatorVerification(next, milestone, coordinatorTranscript);
+      } else {
+        assertStudioMilestoneHasIndependentVerification(next, milestone, children);
+      }
     }
   }
+}
+
+export function assertStudioMilestoneHasCoordinatorVerification(
+  run: Pick<StudioRun, "workspaceId" | "coordinatorSessionId">,
+  milestone: StudioMilestone,
+  transcript: readonly TranscriptMessage[],
+): void {
+  if (!run.coordinatorSessionId) {
+    throw new Error("Coordinator verification requires the saved Studio coordinator thread.");
+  }
+  if (milestone.deliveryRequirement !== "local") {
+    throw new Error("Coordinator verification is allowed only for a local milestone.");
+  }
+  if (milestone.workerThreadIds.length > 0 || milestone.worktreeIds.length > 0) {
+    throw new Error(
+      "Delegated Studio work requires an independent-inspector child; coordinator verification cannot downgrade it.",
+    );
+  }
+  if (!hasSuccessfulCoordinatorTest(transcript)) {
+    throw new Error(
+      `Milestone ${milestone.id} coordinator verification has no successful specification-relevant check evidence.`,
+    );
+  }
+  if (!hasCoordinatorGitInspection(transcript)) {
+    throw new Error(
+      `Milestone ${milestone.id} coordinator verification has no successful Git diff/status inspection evidence.`,
+    );
+  }
+  if (!hasCoordinatorPassMarker(transcript, milestone.id)) {
+    throw new Error(
+      `Milestone ${milestone.id} coordinator must finish with "COORDINATOR-VERIFIED: ${milestone.id} PASS".`,
+    );
+  }
+}
+
+function commandFromTranscriptTool(message: TranscriptMessage): string | undefined {
+  if (message.kind !== "tool" || message.status !== "success") return undefined;
+  if (typeof message.input !== "object" || message.input === null || Array.isArray(message.input)) {
+    return undefined;
+  }
+  const input = message.input as Record<string, unknown>;
+  for (const key of ["cmd", "command", "script"]) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function hasSuccessfulCoordinatorTest(transcript: readonly TranscriptMessage[]): boolean {
+  return transcript.some((message) => {
+    const command = commandFromTranscriptTool(message);
+    return Boolean(
+      command &&
+        /\b(test|spec|typecheck|build|playwright|vitest|jest|tsc|check)\b/i.test(command),
+    );
+  });
+}
+
+function hasCoordinatorGitInspection(transcript: readonly TranscriptMessage[]): boolean {
+  return transcript.some((message) => {
+    const command = commandFromTranscriptTool(message);
+    return Boolean(command && /\bgit\s+(diff|show|status)\b/i.test(command));
+  });
+}
+
+function hasCoordinatorPassMarker(
+  transcript: readonly TranscriptMessage[],
+  milestoneId: string,
+): boolean {
+  const expected = `COORDINATOR-VERIFIED: ${milestoneId} PASS`.toLowerCase();
+  const finalAssistant = [...transcript]
+    .reverse()
+    .find((message) => message.kind === "message" && message.role === "assistant");
+  return Boolean(
+    finalAssistant?.kind === "message" &&
+      finalAssistant.text
+        .split("\n")
+        .some((line) => line.trim().toLowerCase() === expected),
+  );
 }
 
 /**

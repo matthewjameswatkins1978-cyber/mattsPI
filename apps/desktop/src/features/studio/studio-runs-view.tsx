@@ -1,5 +1,9 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import type { StudioRun, StudioRunDeliveryPolicy } from "../../../contracts/studio-runs";
+import type {
+  StudioMilestoneVerificationRequirement,
+  StudioRun,
+  StudioRunDeliveryPolicy,
+} from "../../../contracts/studio-runs";
 import {
   hasTrustedGitHubMergeForCheckpoint,
   studioExternalReviewStatus,
@@ -41,6 +45,7 @@ function createDraftRun(
   specification: string,
   mode: StudioRun["mode"],
   deliveryPolicy: StudioRunDeliveryPolicy,
+  verificationRequirement: StudioMilestoneVerificationRequirement,
 ): StudioRun {
   const now = stamp();
   const runId = `studio-${crypto.randomUUID()}`;
@@ -62,6 +67,7 @@ function createDraftRun(
         workerThreadIds: [],
         worktreeIds: [],
         deliveryRequirement: deliveryPolicy,
+        verificationRequirement,
         updatedAt: now,
       },
     ],
@@ -85,6 +91,8 @@ export function StudioRunsView({
   const [specification, setSpecification] = useState("");
   const [mode, setMode] = useState<StudioRun["mode"]>("observed");
   const [deliveryPolicy, setDeliveryPolicy] = useState<StudioRunDeliveryPolicy>("github-pr");
+  const [verificationRequirement, setVerificationRequirement] =
+    useState<StudioMilestoneVerificationRequirement>("independent-inspector");
   const [busyRunId, setBusyRunId] = useState<string>();
   const [error, setError] = useState<string>();
   const [correctionText, setCorrectionText] = useState("");
@@ -133,7 +141,13 @@ export function StudioRunsView({
 
   const createPlan = async () => {
     if (!workspace || !specification.trim()) return;
-    const run = createDraftRun(workspace, specification.trim(), mode, deliveryPolicy);
+    const run = createDraftRun(
+      workspace,
+      specification.trim(),
+      mode,
+      deliveryPolicy,
+      verificationRequirement,
+    );
     await save(run);
     setSpecification("");
   };
@@ -142,7 +156,13 @@ export function StudioRunsView({
     const packet = specification.trim();
     if (!workspace || !packet || !selectedThreadTarget) return;
     const run = {
-      ...createDraftRun(workspace, packet, mode, deliveryPolicy),
+      ...createDraftRun(
+        workspace,
+        packet,
+        mode,
+        deliveryPolicy,
+        verificationRequirement,
+      ),
       coordinatorSessionId: selectedThreadTarget.sessionId,
     };
     setBusyRunId(run.id);
@@ -393,12 +413,30 @@ export function StudioRunsView({
             <span>Delivery</span>
             <select
               value={deliveryPolicy}
-              onChange={(event) =>
-                setDeliveryPolicy(event.currentTarget.value as StudioRunDeliveryPolicy)
-              }
+              onChange={(event) => {
+                const next = event.currentTarget.value as StudioRunDeliveryPolicy;
+                setDeliveryPolicy(next);
+                if (next !== "local") setVerificationRequirement("independent-inspector");
+              }}
             >
               <option value="github-pr">GitHub pull request (default)</option>
               <option value="local">Local-only demonstration</option>
+            </select>
+          </label>
+          <label className="studio-field">
+            <span>Verification</span>
+            <select
+              value={verificationRequirement}
+              onChange={(event) =>
+                setVerificationRequirement(
+                  event.currentTarget.value as StudioMilestoneVerificationRequirement,
+                )
+              }
+            >
+              <option value="independent-inspector">Independent inspector (default)</option>
+              <option value="coordinator" disabled={deliveryPolicy !== "local"}>
+                Coordinator evidence (small local task only)
+              </option>
             </select>
           </label>
           <label className="studio-field">
@@ -441,9 +479,13 @@ export function StudioRunsView({
             Preparing stores the draft and fills the selected project thread with a /studio command.
             It does not send the command. Check the selected model, then send it when you are ready.
             This handoff is available in Observed mode. Delivery policy is recorded once at creation
-            and is host-owned: milestones appended later inherit it. Local-only delivery is an
-            authorised demonstration route; dependent milestones then unlock on internally verified
-            local completion instead of an observed GitHub merge.
+            and is host-owned: milestones appended later inherit it. Verification policy is also
+            host-owned. Independent inspection is the default; coordinator verification is available
+            only when you explicitly choose it for a small local task, and the host still requires
+            successful check evidence, a Git diff/status inspection, and an exact coordinator PASS
+            marker before completion. Local-only delivery is an authorised demonstration route;
+            dependent milestones then unlock on internally verified local completion instead of an
+            observed GitHub merge.
           </p>
         </section>
 
